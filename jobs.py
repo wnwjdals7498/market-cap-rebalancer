@@ -12,6 +12,7 @@ import argparse
 import logging
 import math
 import sqlite3
+import sys
 from dataclasses import asdict, fields
 from datetime import timedelta
 from pathlib import Path
@@ -262,10 +263,12 @@ def main() -> None:
     sub.add_parser("status")
     a = ap.parse_args()
 
-    Path(__file__).with_name("logs").mkdir(exist_ok=True)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
-                        handlers=[logging.FileHandler(Path(__file__).with_name("logs") / "jobs.log",
-                                                      encoding="utf-8"), logging.StreamHandler()])
+    logs = Path(__file__).with_name("logs")
+    logs.mkdir(exist_ok=True)
+    handlers: list[logging.Handler] = [logging.FileHandler(logs / "jobs.log", encoding="utf-8")]
+    if sys.stderr is not None:  # None under pythonw (scheduled task)
+        handlers.append(logging.StreamHandler())
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", handlers=handlers)
     conn = db.connect(a.db)
     now = pd.Timestamp.now(tz="UTC")
 
