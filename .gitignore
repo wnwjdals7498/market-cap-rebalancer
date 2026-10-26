@@ -1,0 +1,9 @@
+.venv/
+cache/
+__pycache__/
+.pytest_cache/
+paper_state.json
+results/*.csv
+*.db
+*.db-journal
+logs/
