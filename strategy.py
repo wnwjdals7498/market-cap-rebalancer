@@ -34,6 +34,7 @@ class Config:
     kr_fee: float = 0.00015           # 국내 매매 수수료 (편도)
     kr_stock_sell_tax: float = 0.0020 # 국내 주식 매도 시 거래세 (ETF 면제)
     fx_spread: float = 0.0025         # 환전 스프레드 (편도)
+    min_trade_pct: float = 0.5        # 실거래: 포켓 대비 이보다 작은 주문은 생략 (전량 매도는 예외)
     kr_taxable: frozenset = field(default_factory=frozenset)  # 거래세 대상 종목
 
     @property
