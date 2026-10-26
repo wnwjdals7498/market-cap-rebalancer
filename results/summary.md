@@ -1,6 +1,6 @@
 # 백테스트 결과 2021-10-26 ~ 2026-10-23
 
-초기자본 100,000,000원, 원화 기준. 설정: `{'stock_pct': 60.0, 'us_pct': 50.0, 'fx_mode': 'separate', 'band_pp': 0.0, 'step_pct': 10.0, 'confirm_days': 3, 'pair_confirm_days': 3, 'solo_after_days': 0, 'us_bond': 'IEF', 'kr_bond': '148070.KS', 'us_fee': 0.0007, 'kr_fee': 0.00015, 'kr_stock_sell_tax': 0.002, 'fx_spread': 0.0025}`
+초기자본 100,000,000원, 원화 기준. 설정: `{'stock_pct': 60.0, 'us_pct': 50.0, 'fx_mode': 'separate', 'band_pp': 0.0, 'step_pct': 10.0, 'confirm_days': 3, 'pair_confirm_days': 3, 'solo_after_days': 0, 'us_bond': 'IEF', 'kr_bond': '148070.KS', 'us_fee': 0.0007, 'kr_fee': 0.00015, 'kr_stock_sell_tax': 0.002, 'fx_spread': 0.0025, 'min_trade_pct': 0.5}`
 
 | 시나리오                          | 총수익률    | CAGR   | 변동성   |   Sharpe(rf=0) | MDD    |     최종자산(원) |   비용합계(원) | 누적거래대금/초기자본   | 1위교체(US/KR)   |
 |:------------------------------|:--------|:-------|:------|---------------:|:-------|------------:|----------:|:--------------|:--------------|
