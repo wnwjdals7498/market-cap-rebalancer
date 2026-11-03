@@ -13,6 +13,7 @@ import logging
 import math
 import sqlite3
 import sys
+import time
 from dataclasses import asdict, fields
 from datetime import timedelta
 from pathlib import Path
@@ -21,6 +22,8 @@ import pandas as pd
 
 import data
 import db
+from brokers import Broker, SimBroker
+from execution import ExecParams, execute, limit_price
 from markets import MARKETS, Market, current_session, session_times
 from sources import FallbackSource, Quote, Source, YFinanceSource
 from strategy import CASH, Config, LeaderState, plan_targets, pocket_value, trade_cost, update_state
@@ -30,7 +33,6 @@ log = logging.getLogger("mcr")
 MAX_QUOTE_AGE = timedelta(minutes=40)  # yfinance KRX quotes lag ~20 min
 SHARES_JUMP = 0.20                     # reject a new share count that moves more than this vs the last one
 MCAP_JUMP = 0.40                       # day-over-day market-cap move treated as bad data
-PRICE_BAND = 0.05                      # limit price = market price +/- 5%
 
 
 class JobError(RuntimeError):
@@ -160,14 +162,40 @@ def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source,
     return _guarded("signal", conn, mkt, session, force, work)
 
 
+def managed(units: dict[str, float], mkt: Market, cfg: Config) -> dict[str, float]:
+    """Holdings this strategy may trade: its universe, the bond ETF and cash. Anything else in the
+    account (the user's own positions) is left untouched."""
+    keep = set(mkt.universe) | {bond_of(mkt, cfg), CASH}
+    other = sorted(t for t, q in units.items() if t not in keep and q)
+    if other:
+        log.warning("%s: ignoring holdings outside the strategy: %s", mkt.code, other)
+    return {t: q for t, q in units.items() if t in keep}
+
+
+def plan_orders(targets: dict[str, tuple[float, float]], units: dict[str, float], prices: dict[str, float],
+                cfg: Config) -> list[tuple[str, int]]:
+    """Integer-share deltas toward target weights; trades under min_trade_pct are skipped (full exits never)."""
+    value = pocket_value(units, prices)
+    min_trade = cfg.min_trade_pct / 100 * value
+    orders = []
+    for t in sorted((set(targets) | set(units)) - {CASH}):
+        want = math.floor(targets.get(t, (0.0, 0.0))[0] * value / prices[t])
+        delta = want - int(units.get(t, 0))
+        if delta and (want == 0 or abs(delta) * prices[t] >= min_trade):
+            orders.append((t, delta))
+    return orders
+
+
 def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source, cfg: Config,
-                now: pd.Timestamp, force: bool = False) -> str:
-    """Paper execution: integer shares at the current quote, sells before buys."""
+                now: pd.Timestamp, force: bool = False, broker: Broker | None = None, dry_run: bool = False,
+                params: ExecParams = ExecParams(), sleep=time.sleep) -> str:
+    """Trade toward the session's targets. broker=None simulates fills against the SQLite positions;
+    dry_run records the planned orders without sending them."""
     def work():
         if db.run_status(conn, "signal", mkt.code, session) not in ("OK", "SKIPPED"):
             raise JobError("signal has not completed for this session")
         targets = db.load_targets(conn, session, mkt.code)
-        _, units = db.latest_positions(conn, mkt.code)
+        units = managed(broker.balance(mkt.code), mkt, cfg) if broker else db.latest_positions(conn, mkt.code)[1]
         tickers = sorted((set(targets) | set(units)) - {CASH})
         tz = str(session_times(mkt, session).open.tz)
         quotes = fresh_quotes(src, tickers, session, tz, now)
@@ -175,40 +203,36 @@ def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source
         if missing:
             raise JobError(f"no fresh quote for {missing}")
         prices = {t: q.price for t, q in quotes.items()}
-        value = pocket_value(units, prices)
-        min_trade = cfg.min_trade_pct / 100 * value
+        plan = plan_orders(targets, units, prices, cfg)
+        bond = bond_of(mkt, cfg)
 
-        orders = []
-        for t in tickers:
-            weight = targets.get(t, (0.0, 0.0))[0]
-            want = math.floor(weight * value / prices[t])
-            delta = want - int(units.get(t, 0))
-            if delta and (want == 0 or abs(delta) * prices[t] >= min_trade):
-                orders.append((t, delta))
+        if dry_run:
+            for t, delta in plan:
+                side = "BUY" if delta > 0 else "SELL"
+                db.save_order(conn, {"session_date": session, "market": mkt.code, "ticker": t, "side": side,
+                                     "step": 0, "qty": abs(delta), "ref_price": prices[t],
+                                     "limit_price": limit_price(prices[t], 0.0, mkt.code, side, t == bond),
+                                     "status": "PLANNED"})
+            return "OK", "DRY_RUN " + ("; ".join(f"{t} {d:+d}@{prices[t]:,.2f}" for t, d in plan) or "no orders")
 
-        cash = units.get(CASH, 0.0)
-        new_units = dict(units)
-        fills = []
-        for t, delta in sorted(orders, key=lambda o: o[1]):  # sells (negative) first
-            price = prices[t]
-            if delta > 0:
-                affordable = math.floor(cash / (price + trade_cost(cfg, mkt.code, t, price)))
-                delta = min(delta, affordable)
-                if delta <= 0:
-                    continue
-            notional = delta * price
-            cost = trade_cost(cfg, mkt.code, t, notional)
-            cash -= notional + cost
-            new_units[t] = new_units.get(t, 0) + delta
-            side = "BUY" if delta > 0 else "SELL"
-            limit = price * (1 + PRICE_BAND) if delta > 0 else price * (1 - PRICE_BAND)
-            db.save_order(conn, {"session_date": session, "market": mkt.code, "ticker": t, "side": side,
-                                 "qty": abs(delta), "ref_price": price, "limit_price": limit,
-                                 "fill_price": price, "cost": cost, "status": "FILLED"})
-            fills.append(f"{side} {t} {abs(delta)}@{price:,.2f}")
-        new_units[CASH] = cash
+        b = broker or SimBroker({mkt.code: units}, prices, cfg)
+        results = execute(b, mkt.code, plan, prices, etfs={bond}, params=params, sleep=sleep)
+        for r in results:
+            for o in r.orders:
+                fill_px = o["fill_price"] or o["limit_price"]
+                signed = o["filled"] if r.side == "BUY" else -o["filled"]
+                db.save_order(conn, {"session_date": session, "market": mkt.code, "ticker": r.ticker,
+                                     "side": r.side, "step": o["step"], "qty": o["qty"],
+                                     "ref_price": o["ref_price"], "limit_price": o["limit_price"],
+                                     "fill_price": o["fill_price"], "status": o["status"],
+                                     "cost": trade_cost(cfg, mkt.code, r.ticker, signed * fill_px),
+                                     "broker_order_no": o["broker_order_no"]})
+        new_units = managed(b.balance(mkt.code), mkt, cfg)
         db.save_positions(conn, session, mkt.code, new_units, prices)
-        return "OK", ("; ".join(fills) or "no orders") + f"; value {pocket_value(new_units, prices):,.0f}"
+        fills = "; ".join(f"{r.side} {r.ticker} {r.filled}/{r.wanted}@{r.avg_price or 0:,.2f}" for r in results)
+        short = [r.ticker for r in results if r.filled < r.wanted]
+        detail = (fills or "no orders") + f"; value {pocket_value(new_units, prices):,.0f}"
+        return ("OK" if not short else "PARTIAL"), detail + (f"; unfilled {short}" if short else "")
 
     return _guarded("execute", conn, mkt, session, force, work)
 

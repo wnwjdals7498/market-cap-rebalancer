@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS orders (
     market          TEXT NOT NULL,
     ticker          TEXT NOT NULL,
     side            TEXT NOT NULL,      -- BUY | SELL
+    step            INTEGER NOT NULL DEFAULT 0,  -- price-ladder rung; one row per order sent
     qty             INTEGER NOT NULL,
     ref_price       REAL NOT NULL,
     limit_price     REAL NOT NULL,
@@ -88,7 +89,7 @@ CREATE TABLE IF NOT EXISTS orders (
     broker_order_no TEXT,
     created_at      TEXT NOT NULL,
     error           TEXT,
-    UNIQUE (session_date, market, ticker, side)
+    UNIQUE (session_date, market, ticker, side, step)
 );
 CREATE TABLE IF NOT EXISTS runs (
     job          TEXT NOT NULL,         -- signal | execute
@@ -262,9 +263,9 @@ def latest_positions(conn: sqlite3.Connection, market: str) -> tuple[str | None,
 def save_order(conn: sqlite3.Connection, order: dict) -> None:
     with conn:
         conn.execute(
-            "INSERT OR REPLACE INTO orders (session_date, market, ticker, side, qty, ref_price, limit_price, "
+            "INSERT OR REPLACE INTO orders (session_date, market, ticker, side, step, qty, ref_price, limit_price, "
             "fill_price, cost, status, broker_order_no, created_at, error) VALUES (:session_date, :market, "
-            ":ticker, :side, :qty, :ref_price, :limit_price, :fill_price, :cost, :status, :broker_order_no, "
-            ":created_at, :error)",
-            {"fill_price": None, "cost": None, "broker_order_no": None, "error": None,
+            ":ticker, :side, :step, :qty, :ref_price, :limit_price, :fill_price, :cost, :status, "
+            ":broker_order_no, :created_at, :error)",
+            {"step": 0, "fill_price": None, "cost": None, "broker_order_no": None, "error": None,
              "created_at": now_iso(), **order})
