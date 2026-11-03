@@ -33,6 +33,7 @@
 | `strategy.py` | 전략 규칙. 백테스트와 일일 루틴이 **같은 함수**를 쓴다 |
 | `backtest.py`, `data.py` | 과거 데이터 백테스트 |
 | `sources.py` | 실시간 데이터 소스 (`Source` 인터페이스) |
+| `kis_auth.py`, `kis_api.py` | KIS 인증(.env, 토큰 캐시), REST 클라이언트(호출 간격·재시도), `KisSource` |
 | `markets.py` | 시장 정의, 세션별 signal/execute 시각 |
 | `db.py` | SQLite 스키마와 접근 함수 |
 | `jobs.py` | CLI: init / signal / execute / tick / status |

@@ -60,6 +60,21 @@ def session_times(market: Market, day: str | pd.Timestamp) -> SessionTimes | Non
     return SessionTimes(day, open_, close, max(execute - SIGNAL_LEAD, open_), execute)
 
 
+def last_trade_time(market: Market, now: pd.Timestamp) -> pd.Timestamp:
+    """`now` while the market is in session, otherwise the most recent session close."""
+    cal = _calendar(market.calendar)
+    day = now.tz_convert(cal.tz).strftime("%Y-%m-%d")
+    s = session_times(market, day)
+    if s is not None and s.open <= now < s.close:
+        return now
+    if s is not None and now >= s.close:
+        return s.close
+    prev = cal.date_to_session(day, direction="previous")
+    if prev == pd.Timestamp(day):  # today is a session but it has not opened yet
+        prev = cal.previous_session(prev)
+    return cal.session_close(prev).tz_convert(cal.tz)
+
+
 def current_session(market: Market, now: pd.Timestamp) -> SessionTimes | None:
     """Session whose local date is today at `now` (tz-aware)."""
     local = now.tz_convert(_calendar(market.calendar).tz)

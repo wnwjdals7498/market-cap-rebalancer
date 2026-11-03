@@ -22,7 +22,7 @@ import pandas as pd
 import data
 import db
 from markets import MARKETS, Market, current_session, session_times
-from sources import Quote, Source, YFinanceSource
+from sources import FallbackSource, Quote, Source, YFinanceSource
 from strategy import CASH, Config, LeaderState, plan_targets, pocket_value, trade_cost, update_state
 
 log = logging.getLogger("mcr")
@@ -67,7 +67,7 @@ def current_weights(state: LeaderState) -> dict[str, float]:
 
 def refresh_shares(conn: sqlite3.Connection, mkt: Market, session: str, src: Source) -> dict[str, float]:
     universe = list(mkt.universe)
-    known = db.latest_shares(conn, universe, before=session)
+    known = db.latest_shares(conn, universe, before=session, source=src.name)
     if all(d == session for d, _ in known.values()) and len(known) == len(universe):
         return {t: s for t, (_, s) in known.items()}
     fetched = src.shares(universe)
@@ -128,9 +128,9 @@ def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source,
             else:
                 valid[t] = mcap
             rows.append({"ticker": t, "price": q.price, "quote_time": q.time.isoformat(), "shares": shares[t],
-                         "mcap": mcap, "source": src.name, "flag": flag})
+                         "mcap": mcap, "source": q.source or src.name, "flag": flag})
         rows.append({"ticker": bond, "price": quotes[bond].price, "quote_time": quotes[bond].time.isoformat(),
-                     "source": src.name})
+                     "source": quotes[bond].source or src.name})
         db.save_snapshot(conn, session, mkt.code, rows)
 
         ranked = sorted(valid.items(), key=lambda kv: kv[1], reverse=True)
@@ -231,6 +231,24 @@ def tick(conn: sqlite3.Connection, src: Source, cfg: Config, now: pd.Timestamp) 
     return out
 
 
+def make_source(name: str) -> Source:
+    """kis: KIS quotes (+ KR shares), yfinance for US shares and for anything KIS fails on.
+    auto: kis when .env credentials load, else yfinance."""
+    yf_src = YFinanceSource()
+    if name == "yfinance":
+        return yf_src
+    from kis_api import KisClient, KisSource
+    from kis_auth import KisAuthError
+    try:
+        client = KisClient()
+    except KisAuthError as e:
+        if name == "kis":
+            raise
+        log.info("KIS credentials unavailable (%s); using yfinance", e)
+        return yf_src
+    return FallbackSource(KisSource(client, us_shares=yf_src), yf_src)
+
+
 def status(conn: sqlite3.Connection) -> str:
     lines = []
     for code in MARKETS:
@@ -246,6 +264,8 @@ def status(conn: sqlite3.Connection) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--db", default=str(db.DEFAULT_DB))
+    ap.add_argument("--source", choices=["auto", "kis", "yfinance"], default="auto",
+                    help="quote source (auto: KIS if .env credentials exist)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("init", help="create paper account / save config")
     p.add_argument("--usd", type=float, required=True)
@@ -287,7 +307,7 @@ def main() -> None:
         print(status(conn))
         return
 
-    cfg, src = load_config(conn), YFinanceSource()
+    cfg, src = load_config(conn), make_source(a.source)
     if a.cmd == "tick":
         for line in tick(conn, src, cfg, now) or ["nothing due"]:
             print(line)

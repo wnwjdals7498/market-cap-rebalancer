@@ -15,6 +15,7 @@ warnings.filterwarnings("ignore")
 class Quote:
     price: float
     time: pd.Timestamp  # tz-aware time of the last trade/bar
+    source: str = ""
 
 
 class Source(Protocol):
@@ -50,5 +51,23 @@ class YFinanceSource:
                 continue
             s = bars[t].dropna()
             if not s.empty:
-                out[t] = Quote(float(s.iloc[-1]), s.index[-1])
+                out[t] = Quote(float(s.iloc[-1]), s.index[-1], self.name)
         return out  # tickers without a bar are omitted; callers treat them as missing
+
+
+class FallbackSource:
+    """Per-ticker fallback: whatever `primary` cannot answer is asked of `secondary`."""
+
+    def __init__(self, primary: Source, secondary: Source):
+        self.primary, self.secondary = primary, secondary
+        self.name = f"{primary.name}+{secondary.name}"
+
+    def shares(self, tickers: list[str]) -> dict[str, float]:
+        out = self.primary.shares(tickers)
+        missing = [t for t in tickers if t not in out]
+        return out | (self.secondary.shares(missing) if missing else {})
+
+    def quotes(self, tickers: list[str]) -> dict[str, Quote]:
+        out = self.primary.quotes(tickers)
+        missing = [t for t in tickers if t not in out]
+        return out | (self.secondary.quotes(missing) if missing else {})

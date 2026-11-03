@@ -162,12 +162,15 @@ def save_shares(conn: sqlite3.Connection, date: str, shares: dict[str, float], s
                          [(date, t, s, source) for t, s in shares.items()])
 
 
-def latest_shares(conn: sqlite3.Connection, tickers: list[str], before: str | None = None) -> dict[str, tuple[str, float]]:
-    """{ticker: (date, shares)} most recent on/before `before` (inclusive)."""
+def latest_shares(conn: sqlite3.Connection, tickers: list[str], before: str | None = None,
+                  source: str | None = None) -> dict[str, tuple[str, float]]:
+    """{ticker: (date, shares)} most recent on/before `before` (inclusive), optionally from one source
+    (sources count shares differently, e.g. common only vs all classes)."""
     out = {}
     for t in tickers:
         row = conn.execute("SELECT date, shares FROM shares WHERE ticker = ? AND date <= ? "
-                           "ORDER BY date DESC LIMIT 1", (t, before or "9999-12-31")).fetchone()
+                           "AND (? IS NULL OR source = ?) ORDER BY date DESC LIMIT 1",
+                           (t, before or "9999-12-31", source, source)).fetchone()
         if row:
             out[t] = (row["date"], row["shares"])
     return out

@@ -75,6 +75,15 @@ powershell -ExecutionPolicy Bypass -File scripts\register_task.ps1 -Unregister
 
 접근토큰은 `%LOCALAPPDATA%\market-cap-rebalancer\` 에 캐시하고 만료 1시간 전까지 재사용 (KIS 토큰 발급 제한 대응).
 
+### 시세 소스 (`jobs.py --source auto|kis|yfinance`, 기본 auto)
+
+- `auto`: `.env` 인증정보가 있으면 KIS, 없으면 yfinance.
+- KIS: 현재가는 한국·미국 모두 KIS. 주식수는 한국 = KIS 상장주식수, 미국 = yfinance (KIS 는 상장 클래스만 줘서 GOOGL 시총이 절반으로 잡힘).
+- KIS 에서 실패한 종목은 yfinance 로 대체. snapshot 의 `source` 열에 실제 출처 기록.
+- KIS 응답엔 시각이 없어서 장중이면 조회 시각, 장 밖이면 직전 장 마감 시각으로 기록 → 장 밖 시세는 자동으로 오래된 시세 처리.
+- 호출 간격: 모의 1.05초, 실전 0.06초. `EGW00201`(초당 건수 초과)은 재시도.
+- 주식수 급변 검사는 같은 소스끼리만 비교 (보통주만 vs 전체 클래스 차이로 오탐 방지).
+
 ## SQLite (`mcr.db`)
 
 | 테이블 | 내용 |
@@ -91,7 +100,7 @@ powershell -ExecutionPolicy Bypass -File scripts\register_task.ps1 -Unregister
 
 ## 가정 / 한계
 
-- 데이터: yfinance (비공식). `sources.py` 의 `Source` 인터페이스로 KIS 시세 API 등 교체 가능.
+- 데이터: KIS 시세 (인증정보 있을 때) + yfinance (미국 주식수, 대체용). 새 소스는 `sources.py` 의 `Source` 인터페이스로 추가.
 - 백테스트는 전일 종가 신호 / 당일 종가 체결, 실운용은 당일 11시 신호 / 12시 체결이라 결과가 조금 다를 수 있음.
 - 비용: 미국 0.07%, 국내 0.015% + 주식 매도 거래세 0.20%, 환전 0.25%. **양도소득세·배당세 미반영**.
 - 실계좌 주문(2단계: KIS Open API, 장 중간 ±5% 지정가)은 아직 없음.
