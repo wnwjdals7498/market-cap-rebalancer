@@ -23,6 +23,7 @@ import pandas as pd
 
 import data
 import db
+import notify
 from brokers import Broker, SimBroker
 from execution import ExecParams, execute, limit_price
 from markets import MARKETS, Market, current_session, session_times
@@ -87,6 +88,8 @@ def refresh_shares(conn: sqlite3.Connection, mkt: Market, session: str, src: Sou
 
 
 def _guarded(job: str, conn: sqlite3.Connection, mkt: Market, session: str, force: bool, fn) -> str:
+    last = conn.execute("SELECT status, detail FROM runs WHERE job = ? AND market = ? AND session_date = ?",
+                        (job, mkt.code, session)).fetchone()
     if not db.claim_run(conn, job, mkt.code, session, force):
         return f"{job} {mkt.code} {session}: already done"
     try:
@@ -97,9 +100,15 @@ def _guarded(job: str, conn: sqlite3.Connection, mkt: Market, session: str, forc
             log.error("%s %s %s failed: %s", job, mkt.code, session, e)
         else:
             log.exception("%s %s %s failed", job, mkt.code, session)
+        if not (last and last["status"] == "FAILED" and last["detail"] == repr(e)):  # tick retries every 5 min
+            why = notify.hint(str(e))
+            notify.send(f"❌ {job} {mkt.code} {session} FAILED: {e}" + (f"\n→ {why}" if why else ""))
         raise
     db.finish_run(conn, job, mkt.code, session, status, detail)
     log.info("%s %s %s %s: %s", job, mkt.code, session, status, detail)
+    # alert on anything a human should look at: held-back signals, partial fills, and every trade
+    if status in ("SKIPPED", "PARTIAL") or (job == "execute" and not detail.startswith("no orders")):
+        notify.send(f"{'⚠️' if status != 'OK' else '✅'} {job} {mkt.code} {session} {status}: {detail}")
     return f"{job} {mkt.code} {session} {status}: {detail}"
 
 
@@ -140,6 +149,7 @@ def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source,
         ranked = sorted(valid.items(), key=lambda kv: kv[1], reverse=True)
         db.save_rankings(conn, session, mkt.code, ranked)
         state = db.load_state(conn, mkt.code, session)
+        before = (state.mode, state.leader, tuple(state.pair))
         if suspect or len(ranked) < 2:
             # bad or missing data: keep yesterday's ranking memory, only re-apply its weights
             if state.leader is None:
@@ -148,6 +158,9 @@ def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source,
         else:
             weights, note = update_state(state, [t for t, _ in ranked], cfg), "OK"
         db.save_state(conn, session, mkt.code, state)
+        if before[1] is not None and before != (state.mode, state.leader, tuple(state.pair)):
+            notify.send(f"🔄 {mkt.code} {session} 순위 변화: 1위 {before[1]} → {state.leader}, "
+                        f"모드 {before[0]} → {state.mode}, 목표 주식 {'/'.join(weights)}")
 
         prices = {t: q.price for t, q in quotes.items()}
         missing = [t for t in units if t != CASH and t not in prices]
@@ -379,6 +392,10 @@ def main() -> None:
     try:
         broker, dry_run = make_broker(conn)
     except JobError as e:
+        today = now.tz_convert("Asia/Seoul").strftime("%Y-%m-%d")
+        if db.get_setting(conn, "alerted:broker") != [today, str(e)]:  # once a day, not every tick
+            notify.send(f"❌ {a.cmd} FAILED: {e}")
+            db.set_setting(conn, "alerted:broker", [today, str(e)])
         raise SystemExit(f"FAILED: {e}")
     if a.cmd == "tick":
         for line in tick(conn, src, cfg, now, broker=broker, dry_run=dry_run) or ["nothing due"]:

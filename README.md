@@ -105,6 +105,21 @@ powershell -ExecutionPolicy Bypass -File scripts\register_task.ps1 -Unregister
 - 계좌의 다른 종목(전략 universe·채권 ETF 밖)은 건드리지 않음. 현금은 해당 통화 계좌 현금 전체를 사용.
 - 단계별 주문은 `orders` 에 한 줄씩 (`step`, `broker_order_no`, `status` FILLED/PARTIAL/CANCELLED).
 
+## 텔레그램 알림
+
+1. 텔레그램 `@BotFather` 에서 `/newbot` → 봇 토큰을 `.env` 의 `TELEGRAM_BOT_TOKEN` 에 입력
+2. 만든 봇에게 아무 메시지나 보낸 뒤 `.venv/Scripts/python notify.py --chat-ids` → 나온 값을 `TELEGRAM_CHAT_ID` 에 입력
+3. `.venv/Scripts/python notify.py --test` 로 확인
+
+| 알림 | 시점 |
+|---|---|
+| ❌ FAILED | signal/execute 실패. 같은 오류는 세션당 한 번만 (tick 이 5분마다 재시도해도). KIS 오류코드는 설명 첨부 (예: `40910000` 모의계좌 만료) |
+| ⚠️ SKIPPED / PARTIAL | 데이터 이상으로 순위 갱신 보류, 일부 미체결 |
+| ✅ execute | 주문이 있었던 날의 체결 내역 (DRY_RUN 계획 포함) |
+| 🔄 순위 변화 | 1위·모드(SOLO/SPLIT)·보유 2종목 변경 |
+
+설정이 비어 있으면 알림은 꺼짐. 전송 실패는 로그에만 남고 매매 작업을 멈추지 않음.
+
 ## SQLite (`mcr.db`)
 
 | 테이블 | 내용 |

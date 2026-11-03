@@ -24,7 +24,7 @@
 ```
 
 - yfinance/pandas 경고가 많다. 출력 볼 때 `PYTHONWARNINGS=ignore PYTHONIOENCODING=utf-8`.
-- 테스트는 네트워크를 쓰지 않는다. 외부 데이터가 필요한 로직은 `tests/test_jobs.py` 의 `FakeSource` 처럼 `Source` 를 주입해 검증한다.
+- 테스트는 네트워크를 쓰지 않는다. `tests/conftest.py` 가 텔레그램 전송을 막는다 (`.env` 에 봇이 설정돼 있어도). 외부 데이터가 필요한 로직은 `tests/test_jobs.py` 의 `FakeSource` 처럼 `Source` 를 주입해 검증한다.
 
 ## 코드 구조와 규칙
 
@@ -38,6 +38,7 @@
 | `kis_broker.py` | KIS 잔고·매수가능·주문·체결조회·취소 (`KisBroker`) |
 | `markets.py` | 시장 정의, 세션별 signal/execute 시각 |
 | `db.py` | SQLite 스키마와 접근 함수 |
+| `notify.py` | 텔레그램 알림 (설정 없으면 꺼짐, 예외를 밖으로 던지지 않음) |
 | `jobs.py` | CLI: init / signal / execute / tick / status / config |
 
 - 전략 규칙을 바꾸면 `strategy.py` 만 고치고, 백테스트를 다시 돌려 `results/summary.md` 갱신, README 규칙 표 갱신까지 같은 커밋에. 백테스트와 실운용 규칙이 갈라지면 백테스트 결과가 의미를 잃는다.

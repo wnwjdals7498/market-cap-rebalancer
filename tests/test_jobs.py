@@ -167,3 +167,22 @@ def test_make_broker_defaults_and_real_money_guard(env, monkeypatch):
         jobs.make_broker(conn)
     db.set_setting(conn, "trading", {"broker": "kis", "submit": True, "allow_real": True})
     assert jobs.make_broker(conn)[1] is False
+
+
+def test_failures_alert_once_and_trades_alert(env, no_real_alerts):
+    conn, src, cfg = env
+    set_day(src, "2026-10-26", {"AAPL": 5000})
+    src.quote_time = pd.Timestamp("2026-10-23 15:59", tz=NY)  # stale -> fails
+    for minute in ("11:50", "11:55"):
+        with pytest.raises(jobs.JobError):
+            jobs.run_signal(conn, US, "2026-10-26", src, cfg, pd.Timestamp(f"2026-10-26 {minute}", tz=NY))
+    assert len(no_real_alerts) == 1 and "FAILED" in no_real_alerts[0]
+    run_day(conn, src, cfg, "2026-10-26", {"AAPL": 5000})
+    assert any("execute US 2026-10-26 OK" in m and "BUY AAPL" in m for m in no_real_alerts)
+
+
+def test_leader_change_alert(env, no_real_alerts):
+    conn, src, cfg = env
+    run_day(conn, src, cfg, "2026-10-26", {"AAPL": 5000, "NVDA": 4900})
+    run_day(conn, src, cfg, "2026-10-27", {"AAPL": 4900, "NVDA": 5000})
+    assert any("1위 AAPL → NVDA" in m for m in no_real_alerts)
