@@ -40,11 +40,22 @@ class KisClient:
         self._last = self.clock()
 
     def get(self, path: str, tr_id: str, params: dict[str, str], retries: int = 3) -> dict:
+        return self._request("GET", path, tr_id, params, retries)
+
+    def post(self, path: str, tr_id: str, body: dict[str, str], retries: int = 3) -> dict:
+        """Rate-limit rejections (EGW00201) are retried; KIS rejects those before accepting an order."""
+        return self._request("POST", path, tr_id, body, retries)
+
+    def _request(self, method: str, path: str, tr_id: str, data: dict[str, str], retries: int) -> dict:
         for attempt in range(retries):
             self._throttle()
             token, _ = get_token(self.creds)
-            r = self.session.get(self.creds.base_url + path, params=params, timeout=10,
-                                 headers=auth_headers(self.creds, token, tr_id))
+            headers = auth_headers(self.creds, token, tr_id)
+            url = self.creds.base_url + path
+            if method == "GET":
+                r = self.session.get(url, params=data, timeout=10, headers=headers)
+            else:
+                r = self.session.post(url, json=data, timeout=10, headers=headers)
             try:
                 body = r.json()
             except ValueError:
@@ -89,6 +100,12 @@ class KisSource:
                 self._exchange[ticker] = ex
                 return out
         raise KisApiError("NOTFOUND", f"{ticker} not listed on {order}")
+
+    def exchange(self, ticker: str) -> str:
+        """KIS quote exchange code (NAS/NYS/AMS) of a US ticker."""
+        if ticker not in self._exchange:
+            self._us(ticker)
+        return self._exchange[ticker]
 
     def quotes(self, tickers: list[str]) -> dict[str, Quote]:
         out = {}
