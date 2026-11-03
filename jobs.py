@@ -5,6 +5,7 @@
     python jobs.py execute --market KR [--date 2026-10-27] [--force]  # 목표 비중대로 모의 체결
     python jobs.py tick                                               # 지금 할 일 실행 (스케줄러용)
     python jobs.py status
+    python jobs.py config --broker kis [--submit] [--allow-real]      # 브로커 선택 (기본 sim, kis 는 DRY_RUN)
 """
 from __future__ import annotations
 
@@ -103,11 +104,12 @@ def _guarded(job: str, conn: sqlite3.Connection, mkt: Market, session: str, forc
 
 
 def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source, cfg: Config,
-               now: pd.Timestamp, force: bool = False) -> str:
+               now: pd.Timestamp, force: bool = False, broker: Broker | None = None) -> str:
+    """broker given: holdings come from the brokerage account (and are snapshotted); otherwise from SQLite."""
     def work():
         tz = session_times(mkt, session).open.tz
         bond = bond_of(mkt, cfg)
-        _, units = db.latest_positions(conn, mkt.code)
+        units = managed(broker.balance(mkt.code), mkt, cfg) if broker else db.latest_positions(conn, mkt.code)[1]
         if not units:
             raise JobError("no positions; run `jobs.py init` first")
         held = [t for t in units if t != CASH and t not in mkt.universe and t != bond]
@@ -151,6 +153,8 @@ def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source,
         missing = [t for t in units if t != CASH and t not in prices]
         if missing:
             raise JobError(f"no fresh quote for held {missing}")
+        if broker:
+            db.save_positions(conn, session, mkt.code, units, prices)
         value = pocket_value(units, prices)
         target = plan_targets(units, prices, weights, bond, cfg, value)
         db.save_targets(conn, session, mkt.code, {t: (v / value, prices[t]) for t, v in target.items()})
@@ -237,7 +241,8 @@ def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source
     return _guarded("execute", conn, mkt, session, force, work)
 
 
-def tick(conn: sqlite3.Connection, src: Source, cfg: Config, now: pd.Timestamp) -> list[str]:
+def tick(conn: sqlite3.Connection, src: Source, cfg: Config, now: pd.Timestamp,
+         broker: Broker | None = None, dry_run: bool = False) -> list[str]:
     """Run whatever is due now. Safe to call every few minutes; runs table prevents repeats."""
     out = []
     for mkt in MARKETS.values():
@@ -246,10 +251,10 @@ def tick(conn: sqlite3.Connection, src: Source, cfg: Config, now: pd.Timestamp) 
             continue
         try:
             if now >= s.signal and db.run_status(conn, "signal", mkt.code, s.session) not in ("OK", "SKIPPED"):
-                out.append(run_signal(conn, mkt, s.session, src, cfg, now))
+                out.append(run_signal(conn, mkt, s.session, src, cfg, now, broker=broker))
             if now >= s.execute and now < s.close - timedelta(minutes=15) \
                     and db.run_status(conn, "execute", mkt.code, s.session) != "OK":
-                out.append(run_execute(conn, mkt, s.session, src, cfg, now))
+                out.append(run_execute(conn, mkt, s.session, src, cfg, now, broker=broker, dry_run=dry_run))
         except Exception as e:  # keep the other market going
             out.append(f"{mkt.code} {s.session} FAILED: {e!r}")
     return out
@@ -273,8 +278,35 @@ def make_source(name: str) -> Source:
     return FallbackSource(KisSource(client, us_shares=yf_src), yf_src)
 
 
+TRADING_DEFAULTS = {"broker": "sim", "submit": False, "allow_real": False}
+
+
+def trading_settings(conn: sqlite3.Connection) -> dict:
+    return TRADING_DEFAULTS | db.get_setting(conn, "trading", {})
+
+
+def make_broker(conn: sqlite3.Connection) -> tuple[Broker | None, bool]:
+    """(broker, dry_run). sim -> (None, False): fills simulated against SQLite positions.
+    kis -> orders are only recorded (DRY_RUN) unless `submit`; a real-money account additionally
+    needs `allow_real`, so switching .env to a real key never trades by itself."""
+    t = trading_settings(conn)
+    if t["broker"] == "sim":
+        return None, False
+    from kis_api import KisClient, KisSource
+    from kis_broker import KisBroker
+    client = KisClient()
+    if client.creds.env == "real" and not t["allow_real"]:
+        raise JobError("KIS_ENV=real but real trading is not enabled (jobs.py config --allow-real)")
+    broker = KisBroker(client, exchange_of=KisSource(client, us_shares=YFinanceSource()).exchange)
+    dry_run = not t["submit"]
+    if not dry_run and client.creds.env == "real":
+        log.warning("REAL-MONEY ORDERS ENABLED")
+    return broker, dry_run
+
+
 def status(conn: sqlite3.Connection) -> str:
-    lines = []
+    t = trading_settings(conn)
+    lines = [f"broker {t['broker']} submit={t['submit']} allow_real={t['allow_real']}"]
     for code in MARKETS:
         lines.append(f"[{code}]")
         for r in conn.execute("SELECT * FROM runs WHERE market = ? ORDER BY session_date DESC, job DESC LIMIT 4",
@@ -305,6 +337,12 @@ def main() -> None:
         p.add_argument("--force", action="store_true")
     sub.add_parser("tick")
     sub.add_parser("status")
+    p = sub.add_parser("config", help="choose broker and order submission")
+    p.add_argument("--broker", choices=["sim", "kis"])
+    p.add_argument("--submit", action=argparse.BooleanOptionalAction,
+                   help="kis: actually send orders (default: record only, DRY_RUN)")
+    p.add_argument("--allow-real", action=argparse.BooleanOptionalAction,
+                   help="permit orders on a KIS_ENV=real account")
     a = ap.parse_args()
 
     logs = Path(__file__).with_name("logs")
@@ -330,10 +368,20 @@ def main() -> None:
     if a.cmd == "status":
         print(status(conn))
         return
+    if a.cmd == "config":
+        t = trading_settings(conn) | {k: v for k, v in (("broker", a.broker), ("submit", a.submit),
+                                                       ("allow_real", a.allow_real)) if v is not None}
+        db.set_setting(conn, "trading", t)
+        print(f"trading settings: {t}")
+        return
 
     cfg, src = load_config(conn), make_source(a.source)
+    try:
+        broker, dry_run = make_broker(conn)
+    except JobError as e:
+        raise SystemExit(f"FAILED: {e}")
     if a.cmd == "tick":
-        for line in tick(conn, src, cfg, now) or ["nothing due"]:
+        for line in tick(conn, src, cfg, now, broker=broker, dry_run=dry_run) or ["nothing due"]:
             print(line)
         return
     mkt = MARKETS[a.market]
@@ -343,9 +391,11 @@ def main() -> None:
         if s is None:
             raise SystemExit(f"{a.market} market is closed today; pass --date")
         session = s.session
-    fn = run_signal if a.cmd == "signal" else run_execute
     try:
-        print(fn(conn, mkt, session, src, cfg, now, force=a.force))
+        if a.cmd == "signal":
+            print(run_signal(conn, mkt, session, src, cfg, now, force=a.force, broker=broker))
+        else:
+            print(run_execute(conn, mkt, session, src, cfg, now, force=a.force, broker=broker, dry_run=dry_run))
     except JobError as e:
         raise SystemExit(f"FAILED: {e}")
 

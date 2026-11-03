@@ -5,6 +5,7 @@ import db
 import jobs
 from markets import MARKETS
 from sources import Quote
+from brokers import SimBroker
 from strategy import CASH, Config
 
 NY = "America/New_York"
@@ -110,3 +111,59 @@ def test_tick_runs_jobs_when_due(env):
     out = jobs.tick(conn, src, cfg, pd.Timestamp("2026-10-26 12:50", tz=NY))
     assert len(out) == 1 and out[0].startswith("execute US 2026-10-26 OK")
     assert jobs.tick(conn, src, cfg, pd.Timestamp("2026-10-26 13:05", tz=NY)) == []
+
+
+class AccountBroker(SimBroker):
+    """SimBroker standing in for a brokerage account that also holds a stock outside the strategy."""
+    name = "account"
+
+
+def test_broker_holdings_drive_signal_and_unmanaged_positions_are_ignored(env):
+    conn, src, cfg = env
+    set_day(src, "2026-10-26", {"AAPL": 5000})
+    src.prices["COIN"] = 100.0
+    acct = AccountBroker({"US": {CASH: 50_000.0, "COIN": 100}}, src.prices, cfg)
+    jobs.run_signal(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 11:50", tz=NY), broker=acct)
+    assert db.latest_positions(conn, "US") == ("2026-10-26", {CASH: 50_000.0})  # COIN not managed
+    src.quote_time = pd.Timestamp("2026-10-26 12:40", tz=NY)
+    jobs.run_execute(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 12:50", tz=NY), broker=acct)
+    assert acct.balance("US")["COIN"] == 100  # never sold
+    assert db.latest_positions(conn, "US")[1] == {CASH: 0.0, "AAPL": 300, "IEF": 200}
+
+
+def test_dry_run_records_planned_orders_only(env):
+    conn, src, cfg = env
+    set_day(src, "2026-10-26", {"AAPL": 5000})
+    acct = AccountBroker({"US": {CASH: 10_000.0}}, src.prices, cfg)
+    jobs.run_signal(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 11:50", tz=NY), broker=acct)
+    src.quote_time = pd.Timestamp("2026-10-26 12:40", tz=NY)
+    out = jobs.run_execute(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 12:50", tz=NY),
+                           broker=acct, dry_run=True)
+    assert "DRY_RUN" in out and acct.balance("US") == {CASH: 10_000.0}
+    rows = conn.execute("SELECT ticker, side, qty, status FROM orders ORDER BY ticker").fetchall()
+    assert [tuple(r) for r in rows] == [("AAPL", "BUY", 60, "PLANNED"), ("IEF", "BUY", 40, "PLANNED")]
+
+
+def test_make_broker_defaults_and_real_money_guard(env, monkeypatch):
+    conn, _, _ = env
+    assert jobs.make_broker(conn) == (None, False)  # sim by default
+
+    import kis_api
+    from kis_auth import KisCredentials
+    env_name = {"v": "paper"}
+
+    class FakeClient:
+        def __init__(self):
+            self.creds = KisCredentials(env_name["v"], "k", "s", "50123456", "01")
+
+    monkeypatch.setattr(kis_api, "KisClient", FakeClient)
+    db.set_setting(conn, "trading", {"broker": "kis"})
+    broker, dry = jobs.make_broker(conn)
+    assert broker.name == "kis" and dry  # DRY_RUN unless --submit
+    db.set_setting(conn, "trading", {"broker": "kis", "submit": True})
+    assert jobs.make_broker(conn)[1] is False
+    env_name["v"] = "real"
+    with pytest.raises(jobs.JobError, match="allow-real"):
+        jobs.make_broker(conn)
+    db.set_setting(conn, "trading", {"broker": "kis", "submit": True, "allow_real": True})
+    assert jobs.make_broker(conn)[1] is False

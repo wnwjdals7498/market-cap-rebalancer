@@ -84,6 +84,27 @@ powershell -ExecutionPolicy Bypass -File scripts\register_task.ps1 -Unregister
 - 호출 간격: 모의 1.05초, 실전 0.06초. `EGW00201`(초당 건수 초과)은 재시도.
 - 주식수 급변 검사는 같은 소스끼리만 비교 (보통주만 vs 전체 클래스 차이로 오탐 방지).
 
+## 주문 (2단계)
+
+```bash
+.venv/Scripts/python jobs.py config --broker kis              # KIS 잔고 사용, 주문은 기록만 (DRY_RUN)
+.venv/Scripts/python jobs.py config --submit                  # 모의투자 서버로 실제 주문 전송
+.venv/Scripts/python jobs.py config --broker sim --no-submit  # SQLite 모의 체결로 복귀
+```
+
+| 설정 | 동작 |
+|---|---|
+| `broker=sim` (기본) | SQLite 보유로 즉시 모의 체결 |
+| `broker=kis`, `submit=false` | 잔고는 KIS 계좌에서 읽고, 주문은 `orders` 에 `PLANNED` 로만 기록 |
+| `broker=kis`, `submit=true` | KIS 로 지정가 주문 전송 |
+| `KIS_ENV=real` | `--allow-real` 없으면 실행 거부 |
+
+- 주문은 정규장 지정가만 (`ORD_DVSN=00`, 한국은 `EXCG_ID_DVSN_CD=KRX`). 미국은 KIS 모의/실전 모두 매수 시장가가 없음.
+- 가격 사다리: 기준가(주문 시점 현재가) 대비 0 → 0.5 → 1 → 2 → 3.5 → 5%. 단계마다 60초 대기, 미체결분 취소 후 다음 가격. 5% 를 넘지 않음. 호가단위(KRX, ETF 5원, 미국 1센트)에 맞춤.
+- 매도 먼저, 매수는 매수가능수량(한국 미수 없는 수량, 미국 달러 주문가능) 이내.
+- 계좌의 다른 종목(전략 universe·채권 ETF 밖)은 건드리지 않음. 현금은 해당 통화 계좌 현금 전체를 사용.
+- 단계별 주문은 `orders` 에 한 줄씩 (`step`, `broker_order_no`, `status` FILLED/PARTIAL/CANCELLED).
+
 ## SQLite (`mcr.db`)
 
 | 테이블 | 내용 |
@@ -103,4 +124,4 @@ powershell -ExecutionPolicy Bypass -File scripts\register_task.ps1 -Unregister
 - 데이터: KIS 시세 (인증정보 있을 때) + yfinance (미국 주식수, 대체용). 새 소스는 `sources.py` 의 `Source` 인터페이스로 추가.
 - 백테스트는 전일 종가 신호 / 당일 종가 체결, 실운용은 당일 11시 신호 / 12시 체결이라 결과가 조금 다를 수 있음.
 - 비용: 미국 0.07%, 국내 0.015% + 주식 매도 거래세 0.20%, 환전 0.25%. **양도소득세·배당세 미반영**.
-- 실계좌 주문(2단계: KIS Open API, 장 중간 ±5% 지정가)은 아직 없음.
+- 연속조회(페이지 넘김)는 미구현: 잔고·체결 목록이 한 페이지(국내 50건 등)를 넘으면 누락될 수 있음.

@@ -34,9 +34,11 @@
 | `backtest.py`, `data.py` | 과거 데이터 백테스트 |
 | `sources.py` | 실시간 데이터 소스 (`Source` 인터페이스) |
 | `kis_auth.py`, `kis_api.py` | KIS 인증(.env, 토큰 캐시), REST 클라이언트(호출 간격·재시도), `KisSource` |
+| `brokers.py`, `execution.py` | `Broker` 인터페이스·`SimBroker`, 지정가 사다리(±5%)·호가단위 |
+| `kis_broker.py` | KIS 잔고·매수가능·주문·체결조회·취소 (`KisBroker`) |
 | `markets.py` | 시장 정의, 세션별 signal/execute 시각 |
 | `db.py` | SQLite 스키마와 접근 함수 |
-| `jobs.py` | CLI: init / signal / execute / tick / status |
+| `jobs.py` | CLI: init / signal / execute / tick / status / config |
 
 - 전략 규칙을 바꾸면 `strategy.py` 만 고치고, 백테스트를 다시 돌려 `results/summary.md` 갱신, README 규칙 표 갱신까지 같은 커밋에. 백테스트와 실운용 규칙이 갈라지면 백테스트 결과가 의미를 잃는다.
 - 전략 수치(비율, 일수, 수수료)는 `Config` 필드로 추가한다. 코드에 상수로 박지 않는다.
