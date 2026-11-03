@@ -113,6 +113,16 @@ def fetch_usdkrw() -> float:
     return float(close.squeeze().dropna().iloc[-1])
 
 
+def pocket_values(conn: sqlite3.Connection) -> tuple[float | None, float | None]:
+    """Latest snapshot value of the KR (KRW) and US (USD) pockets."""
+    out = []
+    for m in ("KR", "US"):
+        d = _latest(conn, "positions", m, "date")
+        out.append(None if d is None else conn.execute(
+            "SELECT SUM(value) FROM positions WHERE market = ? AND date = ?", (m, d)).fetchone()[0])
+    return out[0], out[1]
+
+
 def build_report(conn: sqlite3.Connection, day: str, usdkrw: float | None,
                  last: dict | None = None, first: dict | None = None) -> tuple[str, float | None]:
     """(text, total in KRW or None without an FX rate). last/first: earlier reports' {date, total}."""

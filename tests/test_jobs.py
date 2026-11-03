@@ -223,3 +223,29 @@ def test_report_without_fx_and_tick_schedule(env, no_real_alerts):
     out = jobs.tick(conn, src, cfg, pd.Timestamp("2026-10-27 08:00", tz="Asia/Seoul"), fx=no_fx)
     assert any(o.startswith("report ALL 2026-10-27 OK") for o in out)
     assert "환율 조회 실패" in no_real_alerts[0]
+
+
+def test_web_report_page(env, tmp_path):
+    import webreport
+    conn, src, cfg = env
+    assert "기록 없음" in webreport.build_html(conn)  # empty DB still renders
+    run_day(conn, src, cfg, "2026-10-26", {"AAPL": 5000, "NVDA": 4900})
+    jobs.run_report(conn, pd.Timestamp("2026-10-27 08:05", tz="Asia/Seoul"), fx=lambda: 1400.0)
+    run_day(conn, src, cfg, "2026-10-27", {"AAPL": 4900, "NVDA": 5000})
+    jobs.run_report(conn, pd.Timestamp("2026-10-28 08:05", tz="Asia/Seoul"), fx=lambda: 1400.0)
+    assert [r["date"] for r in conn.execute("SELECT date FROM equity")] == ["2026-10-27", "2026-10-28"]
+
+    page = webreport.build_html(conn)
+    assert page.startswith("<!doctype html>") and "<title>투자 리포트</title>" in page
+    assert "₩140,000,000" in page and "US 2026-10-27 | SOLO" in page
+    assert page.count('class="chart"') == 2  # equity history + US market caps (KR has no rankings)
+    assert "<script src" not in page and "<link" not in page  # self-contained
+    assert "<title>투자 리포트</title>" in webreport.write_site(conn, tmp_path / "site").read_text(encoding="utf-8")
+
+
+def test_line_chart_escapes_and_handles_gaps():
+    import webreport
+    svg = webreport.line_chart(["2026-01-01", "2026-01-02"], [{"name": "<b>", "slot": 0, "values": [None, 5.0]}],
+                               lambda v: f"{v:.0f}")
+    assert "<b>" not in svg.split("<svg")[0] and "&lt;b&gt;" in svg
+    assert webreport.line_chart([], [], str).startswith('<div class="empty">')

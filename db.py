@@ -95,6 +95,13 @@ CREATE TABLE IF NOT EXISTS orders (
     error           TEXT,
     UNIQUE (session_date, market, ticker, side, step)
 );
+CREATE TABLE IF NOT EXISTS equity (    -- daily totals written by the report job (history for charts)
+    date      TEXT PRIMARY KEY,         -- KST date of the report
+    kr_value  REAL NOT NULL,            -- KRW pocket
+    us_value  REAL NOT NULL,            -- USD pocket
+    usdkrw    REAL NOT NULL,
+    total     REAL NOT NULL             -- KRW
+);
 CREATE TABLE IF NOT EXISTS runs (
     job          TEXT NOT NULL,         -- signal | execute
     market       TEXT NOT NULL,
@@ -281,3 +288,9 @@ def save_order(conn: sqlite3.Connection, order: dict) -> None:
             ":broker_order_no, :created_at, :error)",
             {"step": 0, "filled_qty": 0, "fill_price": None, "cost": None, "broker_order_no": None, "error": None,
              "created_at": now_iso(), **order})
+
+
+def save_equity(conn: sqlite3.Connection, date: str, kr_value: float, us_value: float, usdkrw: float) -> None:
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO equity VALUES (?, ?, ?, ?, ?)",
+                     (date, kr_value, us_value, usdkrw, kr_value + us_value * usdkrw))

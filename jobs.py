@@ -6,6 +6,7 @@
     python jobs.py tick                                               # 지금 할 일 실행 (스케줄러용)
     python jobs.py status
     python jobs.py report [--print]                                   # 일일 보고 (tick 이 매일 08:00 KST 전송)
+    python jobs.py web [--serve]                                      # 웹 리포트 site/index.html, 로컬 서버
     python jobs.py config --broker kis [--submit] [--allow-real]      # 브로커 선택 (기본 sim, kis 는 DRY_RUN)
 """
 from __future__ import annotations
@@ -26,6 +27,7 @@ import data
 import db
 import notify
 import report
+import webreport
 from brokers import Broker, SimBroker
 from execution import ExecParams, execute, limit_price
 from markets import MARKETS, Market, current_session, session_times
@@ -260,6 +262,7 @@ def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source
 
 
 REPORT_AT = dtime(8, 0)  # KST: before the KR session, after the US session has closed
+SITE_DIR = Path(__file__).with_name("site")
 
 
 def run_report(conn: sqlite3.Connection, now: pd.Timestamp, fx=report.fetch_usdkrw, force: bool = False,
@@ -279,10 +282,17 @@ def run_report(conn: sqlite3.Connection, now: pd.Timestamp, fx=report.fetch_usdk
             log.warning("USD/KRW fetch failed: %s", e)
             usdkrw = None
         text, total = report.build_report(conn, day, usdkrw, last, first)
+        kr_val, us_val = report.pocket_values(conn)
+        if usdkrw and kr_val is not None and us_val is not None:
+            db.save_equity(conn, day, kr_val, us_val, usdkrw)
         if not send:
             print(text)
             return "OK", "printed"
         ok = notify.send(text)
+        try:
+            webreport.write_site(conn, SITE_DIR, usdkrw)
+        except Exception:  # the web page is a convenience; never fail the report over it
+            log.exception("web report write failed")
         if total is not None:
             entry = {"date": day, "total": total, "runs_rowid": seen}
             db.set_setting(conn, "report:last", entry)
@@ -398,6 +408,10 @@ def main() -> None:
         p.add_argument("--force", action="store_true")
     sub.add_parser("tick")
     sub.add_parser("status")
+    p = sub.add_parser("web", help="investment report web page (site/index.html; --serve for a local server)")
+    p.add_argument("--serve", action="store_true")
+    p.add_argument("--host", default="127.0.0.1", help="127.0.0.1 = this PC only (no login on the page)")
+    p.add_argument("--port", type=int, default=8765)
     p = sub.add_parser("report", help="daily report (sent to Telegram; --print to only show it)")
     p.add_argument("--print", dest="print_only", action="store_true")
     p.add_argument("--force", action="store_true")
@@ -431,6 +445,11 @@ def main() -> None:
         return
     if a.cmd == "status":
         print(status(conn))
+        return
+    if a.cmd == "web":
+        print(f"wrote {webreport.write_site(conn, SITE_DIR)}")
+        if a.serve:
+            webreport.serve(a.db, a.host, a.port)
         return
     if a.cmd == "report":
         print(run_report(conn, now, force=a.force or a.print_only, send=not a.print_only))

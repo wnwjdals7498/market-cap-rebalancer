@@ -143,6 +143,18 @@ powershell -ExecutionPolicy Bypass -File scripts\register_task.ps1 -Unregister
 - 평가는 마지막 보유 스냅샷(체결 시점 가격) 기준. 입출금이 있으면 직전/누적 수익률이 그만큼 왜곡됨.
 - 미리보기: `jobs.py report --print`, 즉시 전송: `jobs.py report --force`.
 
+## 웹 리포트
+
+```bash
+.venv/Scripts/python jobs.py web --serve      # http://127.0.0.1:8765/  (요청마다 SQLite 에서 새로 생성)
+.venv/Scripts/python jobs.py web              # site/index.html 만 생성 (외부 파일 없는 단일 HTML)
+```
+
+- 구성: 총자산·직전/누적 변화·환율 카드, 총자산 추이 차트(일일 보고가 쌓는 `equity` 기록), 시장별 보유 vs 목표 비중, 최근 체결, 시총 상위 3 추이, 주문 내역, 작업 기록.
+- 차트: 마우스를 올리면 날짜별 값, `표로 보기` 로 숫자 표. 라이트/다크 모드 자동.
+- 매일 08:00 보고 때 `site/index.html` 도 갱신 (git-ignore).
+- 기본은 이 PC 에서만 접속 (`127.0.0.1`). 페이지에 로그인 기능이 없으므로 `--host 0.0.0.0` 으로 열면 같은 네트워크의 누구나 계좌 정보를 볼 수 있음.
+
 ## SQLite (`mcr.db`)
 
 | 테이블 | 내용 |
@@ -155,6 +167,7 @@ powershell -ExecutionPolicy Bypass -File scripts\register_task.ps1 -Unregister
 | `targets` | 세션별 목표 비중 + 기준가 |
 | `positions` | 보유 스냅샷 (CASH 포함) |
 | `orders` | 주문/체결 기록 (2단계 실계좌도 같은 테이블) |
+| `equity` | 일일 보고 시점 총자산 (원화·달러 포켓, 환율) — 웹 차트용 |
 | `runs` | 작업 실행 기록 (`RUNNING/OK/SKIPPED/FAILED`) |
 
 ## 가정 / 한계
