@@ -65,6 +65,16 @@ powershell -ExecutionPolicy Bypass -File scripts\register_task.ps1 -Unregister
 ### 같은 날 다시 실행
 `runs` 테이블이 시장·세션별로 한 번만 실행되게 막음. 실패(`FAILED`)한 작업은 다음 `tick` 에서 재시도, `--force` 는 전날 상태에서 다시 계산.
 
+## KIS Open API 인증 (2단계 준비)
+
+`.env.example` 을 `.env` 로 복사해 값 입력 (`.env` 는 git-ignore). 계좌번호는 `12345678-01` 또는 8자리(상품코드 01 가정).
+
+```bash
+.venv/Scripts/python kis_auth.py    # 토큰 발급/재사용 확인. 키·토큰 값은 출력하지 않음
+```
+
+접근토큰은 `%LOCALAPPDATA%\market-cap-rebalancer\` 에 캐시하고 만료 1시간 전까지 재사용 (KIS 토큰 발급 제한 대응).
+
 ## SQLite (`mcr.db`)
 
 | 테이블 | 내용 |
