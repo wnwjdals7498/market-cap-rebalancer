@@ -102,6 +102,7 @@ powershell -ExecutionPolicy Bypass -File scripts\register_task.ps1 -Unregister
 - 주문은 정규장 지정가만 (`ORD_DVSN=00`, 한국은 `EXCG_ID_DVSN_CD=KRX`). 미국은 KIS 모의/실전 모두 매수 시장가가 없음.
 - 가격 사다리: 기준가(주문 시점 현재가) 대비 0 → 0.5 → 1 → 2 → 3.5 → 5%. 단계마다 60초 대기, 미체결분 취소 후 다음 가격. 5% 를 넘지 않음. 호가단위(KRX, ETF 5원, 미국 1센트)에 맞춤.
 - 매도 먼저, 매수는 매수가능수량(한국 미수 없는 수량, 미국 달러 주문가능) 이내.
+- 현금이 모자라 덜 산 매수(실제 수수료가 모델보다 큼, 사다리 위쪽 체결)는 `cash-limited` 로 표시하고 OK 처리. 가격이 안 맞아 못 산·못 판 것만 PARTIAL. KIS 모의투자 미국 수수료는 약 1% (2026-11-03 확인).
 - 계좌의 다른 종목(전략 universe·채권 ETF 밖)은 건드리지 않음. 현금은 해당 통화 계좌 현금 전체를 사용.
 - 단계별 주문은 `orders` 에 한 줄씩 (`step`, `broker_order_no`, `status` FILLED/PARTIAL/CANCELLED).
 

@@ -249,3 +249,15 @@ def test_line_chart_escapes_and_handles_gaps():
                                lambda v: f"{v:.0f}")
     assert "<b>" not in svg.split("<svg")[0] and "&lt;b&gt;" in svg
     assert webreport.line_chart([], [], str).startswith('<div class="empty">')
+
+
+def test_buys_capped_by_cash_are_ok_not_partial(env, no_real_alerts):
+    conn, src, cfg = env
+    set_day(src, "2026-10-26", {"AAPL": 5000})
+    acct = AccountBroker({"US": {CASH: 10_000.0}}, src.prices, Config(us_fee=0.01))  # broker fees above the model
+    jobs.run_signal(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 11:50", tz=NY), broker=acct)
+    src.quote_time = pd.Timestamp("2026-10-26 12:40", tz=NY)
+    out = jobs.run_execute(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 12:50", tz=NY), broker=acct,
+                           sleep=lambda s: None)
+    assert db.run_status(conn, "execute", "US", "2026-10-26") == "OK"
+    assert "cash-limited ['AAPL']" in out and not any("PARTIAL" in m for m in no_real_alerts)

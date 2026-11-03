@@ -41,6 +41,7 @@ class ScriptedBroker:
         no = f"O{len(self.placed)}"
         self.placed.append((ticker, side, qty, price))
         f = min(self.fills.pop(0) if self.fills else 0, qty)
+        self.cash -= f * price if side == "BUY" else 0
         self.orders[no] = OrderState(no, f, price if f else None, qty - f)
         return no
 
@@ -86,3 +87,11 @@ def test_sim_broker_fills_at_market_and_charges_costs():
     assert b.status("KR", "005930.KS", b.place("KR", "005930.KS", "BUY", 1, 199_000)).filled_qty == 0
     b.place("KR", "005930.KS", "SELL", 2, 199_000)
     assert b.balance("KR") == {CASH: pytest.approx(1_000_000 + 400_000 - 400_000 * 0.003), "005930.KS": 8}
+
+
+def test_buy_stopped_by_cash_is_flagged():
+    """Fills used the cash, so the next rung has nothing to buy with: cash-limited, not unfilled."""
+    b = ScriptedBroker(fills=[2], cash=250.0)
+    [r] = execute(b, "US", [("IEF", 5)], {"IEF": 100.0}, params=ExecParams(ladder=(0.0, 0.01), step_wait=10, poll=10),
+                  sleep=lambda s: None)
+    assert (r.filled, r.cash_limited) == (2, True)

@@ -254,9 +254,12 @@ def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source
         new_units = managed(b.balance(mkt.code), mkt, cfg)
         db.save_positions(conn, session, mkt.code, new_units, prices)
         fills = "; ".join(f"{r.side} {r.ticker} {r.filled}/{r.wanted}@{r.avg_price or 0:,.2f}" for r in results)
-        short = [r.ticker for r in results if r.filled < r.wanted]
+        # buys capped by cash (fees above the model, fills up the ladder) are expected, not a failure
+        capped = [r.ticker for r in results if r.filled < r.wanted and r.cash_limited]
+        short = [r.ticker for r in results if r.filled < r.wanted and not r.cash_limited]
         detail = (fills or "no orders") + f"; value {pocket_value(new_units, prices):,.0f}"
-        return ("OK" if not short else "PARTIAL"), detail + (f"; unfilled {short}" if short else "")
+        detail += (f"; cash-limited {capped}" if capped else "") + (f"; unfilled {short}" if short else "")
+        return ("OK" if not short else "PARTIAL"), detail
 
     return _guarded("execute", conn, mkt, session, force, work)
 

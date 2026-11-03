@@ -31,6 +31,7 @@ class TickerResult:
     filled: int = 0
     notional: float = 0.0
     orders: list[dict] = field(default_factory=list)  # one per rung, for the orders table
+    cash_limited: bool = False  # a buy stopped because cash ran out, not because the price never filled
 
     @property
     def avg_price(self) -> float | None:
@@ -91,6 +92,7 @@ def execute(broker: Broker, market: str, plan: list[tuple[str, int]], refs: dict
             qty = remaining if side == "SELL" else min(remaining, broker.buying_power(market, ticker, price))
             if qty <= 0:
                 log.warning("%s %s: no buying power at %s", market, ticker, price)
+                res.cash_limited = True
                 break
             order_no = broker.place(market, ticker, side, qty, price)
             state = _wait_fill(broker, market, ticker, order_no, qty, params, sleep)
