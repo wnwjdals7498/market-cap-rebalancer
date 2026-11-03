@@ -186,3 +186,40 @@ def test_leader_change_alert(env, no_real_alerts):
     run_day(conn, src, cfg, "2026-10-26", {"AAPL": 5000, "NVDA": 4900})
     run_day(conn, src, cfg, "2026-10-27", {"AAPL": 4900, "NVDA": 5000})
     assert any("1위 AAPL → NVDA" in m for m in no_real_alerts)
+
+
+def test_daily_report_sends_once_and_skips_quiet_days(env, no_real_alerts):
+    conn, src, cfg = env
+    run_day(conn, src, cfg, "2026-10-26", {"AAPL": 5000, "NVDA": 4900})
+    no_real_alerts.clear()
+    morning = pd.Timestamp("2026-10-27 08:05", tz="Asia/Seoul")
+    out = jobs.run_report(conn, morning, fx=lambda: 1400.0)
+    assert "sent" in out and len(no_real_alerts) == 1
+    text = no_real_alerts[0]
+    assert text.startswith("📊 일일 보고 2026-10-27 (화)")
+    assert "총자산 ₩140,000,000" in text and "1위 AAPL 1일째" in text
+    assert "매수 AAPL 600주 @100.00" in text and "(1·2위 차 +2.0%)" in text
+
+    assert "already done" in jobs.run_report(conn, morning, fx=lambda: 1400.0)
+    next_day = pd.Timestamp("2026-10-28 08:05", tz="Asia/Seoul")
+    assert "SKIPPED" in jobs.run_report(conn, next_day, fx=lambda: 1400.0)  # no jobs ran in between
+    assert len(no_real_alerts) == 1
+
+    run_day(conn, src, cfg, "2026-10-28", {"AAPL": 5000, "NVDA": 4900})
+    no_real_alerts.clear()
+    jobs.run_report(conn, pd.Timestamp("2026-10-29 08:05", tz="Asia/Seoul"), fx=lambda: 1414.0)
+    assert "직전 +1.00%" in no_real_alerts[0] and "누적 +1.00%" in no_real_alerts[0]
+
+
+def test_report_without_fx_and_tick_schedule(env, no_real_alerts):
+    conn, src, cfg = env
+    run_day(conn, src, cfg, "2026-10-26", {"AAPL": 5000})
+    no_real_alerts.clear()
+
+    def no_fx():
+        raise RuntimeError("offline")
+
+    assert jobs.tick(conn, src, cfg, pd.Timestamp("2026-10-27 07:55", tz="Asia/Seoul"), fx=no_fx) == []
+    out = jobs.tick(conn, src, cfg, pd.Timestamp("2026-10-27 08:00", tz="Asia/Seoul"), fx=no_fx)
+    assert any(o.startswith("report ALL 2026-10-27 OK") for o in out)
+    assert "환율 조회 실패" in no_real_alerts[0]

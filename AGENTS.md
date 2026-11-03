@@ -39,7 +39,8 @@
 | `markets.py` | 시장 정의, 세션별 signal/execute 시각 |
 | `db.py` | SQLite 스키마와 접근 함수 |
 | `notify.py` | 텔레그램 알림 (설정 없으면 꺼짐, 예외를 밖으로 던지지 않음) |
-| `jobs.py` | CLI: init / signal / execute / tick / status / config |
+| `report.py` | 일일 보고 텍스트 (SQLite 만 읽음) |
+| `jobs.py` | CLI: init / signal / execute / tick / status / config / report |
 
 - 전략 규칙을 바꾸면 `strategy.py` 만 고치고, 백테스트를 다시 돌려 `results/summary.md` 갱신, README 규칙 표 갱신까지 같은 커밋에. 백테스트와 실운용 규칙이 갈라지면 백테스트 결과가 의미를 잃는다.
 - 전략 수치(비율, 일수, 수수료)는 `Config` 필드로 추가한다. 코드에 상수로 박지 않는다.

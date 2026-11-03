@@ -5,6 +5,7 @@
     python jobs.py execute --market KR [--date 2026-10-27] [--force]  # 목표 비중대로 모의 체결
     python jobs.py tick                                               # 지금 할 일 실행 (스케줄러용)
     python jobs.py status
+    python jobs.py report [--print]                                   # 일일 보고 (tick 이 매일 08:00 KST 전송)
     python jobs.py config --broker kis [--submit] [--allow-real]      # 브로커 선택 (기본 sim, kis 는 DRY_RUN)
 """
 from __future__ import annotations
@@ -16,7 +17,7 @@ import sqlite3
 import sys
 import time
 from dataclasses import asdict, fields
-from datetime import timedelta
+from datetime import time as dtime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -24,6 +25,7 @@ import pandas as pd
 import data
 import db
 import notify
+import report
 from brokers import Broker, SimBroker
 from execution import ExecParams, execute, limit_price
 from markets import MARKETS, Market, current_session, session_times
@@ -87,29 +89,31 @@ def refresh_shares(conn: sqlite3.Connection, mkt: Market, session: str, src: Sou
     return accepted
 
 
-def _guarded(job: str, conn: sqlite3.Connection, mkt: Market, session: str, force: bool, fn) -> str:
+def _guarded(job: str, conn: sqlite3.Connection, mkt: Market | str, session: str, force: bool, fn) -> str:
+    code = mkt if isinstance(mkt, str) else mkt.code
     last = conn.execute("SELECT status, detail FROM runs WHERE job = ? AND market = ? AND session_date = ?",
-                        (job, mkt.code, session)).fetchone()
-    if not db.claim_run(conn, job, mkt.code, session, force):
-        return f"{job} {mkt.code} {session}: already done"
+                        (job, code, session)).fetchone()
+    if not db.claim_run(conn, job, code, session, force):
+        return f"{job} {code} {session}: already done"
     try:
         status, detail = fn()
     except Exception as e:
-        db.finish_run(conn, job, mkt.code, session, "FAILED", repr(e))
+        db.finish_run(conn, job, code, session, "FAILED", repr(e))
         if isinstance(e, JobError):
-            log.error("%s %s %s failed: %s", job, mkt.code, session, e)
+            log.error("%s %s %s failed: %s", job, code, session, e)
         else:
-            log.exception("%s %s %s failed", job, mkt.code, session)
+            log.exception("%s %s %s failed", job, code, session)
         if not (last and last["status"] == "FAILED" and last["detail"] == repr(e)):  # tick retries every 5 min
             why = notify.hint(str(e))
-            notify.send(f"❌ {job} {mkt.code} {session} FAILED: {e}" + (f"\n→ {why}" if why else ""))
+            notify.send(f"❌ {job} {code} {session} FAILED: {e}" + (f"\n→ {why}" if why else ""))
         raise
-    db.finish_run(conn, job, mkt.code, session, status, detail)
-    log.info("%s %s %s %s: %s", job, mkt.code, session, status, detail)
+    db.finish_run(conn, job, code, session, status, detail)
+    log.info("%s %s %s %s: %s", job, code, session, status, detail)
     # alert on anything a human should look at: held-back signals, partial fills, and every trade
-    if status in ("SKIPPED", "PARTIAL") or (job == "execute" and not detail.startswith("no orders")):
-        notify.send(f"{'⚠️' if status != 'OK' else '✅'} {job} {mkt.code} {session} {status}: {detail}")
-    return f"{job} {mkt.code} {session} {status}: {detail}"
+    if job != "report" and (status in ("SKIPPED", "PARTIAL")
+                            or (job == "execute" and not detail.startswith("no orders"))):
+        notify.send(f"{'⚠️' if status != 'OK' else '✅'} {job} {code} {session} {status}: {detail}")
+    return f"{job} {code} {session} {status}: {detail}"
 
 
 def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source, cfg: Config,
@@ -241,7 +245,8 @@ def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source
                 db.save_order(conn, {"session_date": session, "market": mkt.code, "ticker": r.ticker,
                                      "side": r.side, "step": o["step"], "qty": o["qty"],
                                      "ref_price": o["ref_price"], "limit_price": o["limit_price"],
-                                     "fill_price": o["fill_price"], "status": o["status"],
+                                     "filled_qty": o["filled"], "fill_price": o["fill_price"],
+                                     "status": o["status"],
                                      "cost": trade_cost(cfg, mkt.code, r.ticker, signed * fill_px),
                                      "broker_order_no": o["broker_order_no"]})
         new_units = managed(b.balance(mkt.code), mkt, cfg)
@@ -254,8 +259,45 @@ def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source
     return _guarded("execute", conn, mkt, session, force, work)
 
 
+REPORT_AT = dtime(8, 0)  # KST: before the KR session, after the US session has closed
+
+
+def run_report(conn: sqlite3.Connection, now: pd.Timestamp, fx=report.fetch_usdkrw, force: bool = False,
+               send: bool = True) -> str:
+    """Daily report over the latest SQLite state; skipped when no job ran since the previous report."""
+    day = now.tz_convert("Asia/Seoul").strftime("%Y-%m-%d")
+
+    def work():
+        last, first = db.get_setting(conn, "report:last"), db.get_setting(conn, "report:first")
+        # rowid, not timestamps: claim_run's INSERT OR REPLACE gives every (re)started job a new, larger rowid
+        seen = conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM runs WHERE job != 'report'").fetchone()[0]
+        if last and seen <= last.get("runs_rowid", 0) and not force:
+            return "SKIPPED", "no jobs ran since the last report"
+        try:
+            usdkrw = fx()
+        except Exception as e:  # report without a KRW total rather than not at all
+            log.warning("USD/KRW fetch failed: %s", e)
+            usdkrw = None
+        text, total = report.build_report(conn, day, usdkrw, last, first)
+        if not send:
+            print(text)
+            return "OK", "printed"
+        ok = notify.send(text)
+        if total is not None:
+            entry = {"date": day, "total": total, "runs_rowid": seen}
+            db.set_setting(conn, "report:last", entry)
+            if first is None:
+                db.set_setting(conn, "report:first", entry)
+        return "OK", ("sent" if ok else "not sent (telegram off or failed)") +             (f"; total {total:,.0f}" if total is not None else "")
+
+    if not send:
+        status, detail = work()
+        return f"report {day} {status}: {detail}"
+    return _guarded("report", conn, "ALL", day, force, work)
+
+
 def tick(conn: sqlite3.Connection, src: Source, cfg: Config, now: pd.Timestamp,
-         broker: Broker | None = None, dry_run: bool = False) -> list[str]:
+         broker: Broker | None = None, dry_run: bool = False, fx=report.fetch_usdkrw) -> list[str]:
     """Run whatever is due now. Safe to call every few minutes; runs table prevents repeats."""
     out = []
     for mkt in MARKETS.values():
@@ -270,6 +312,12 @@ def tick(conn: sqlite3.Connection, src: Source, cfg: Config, now: pd.Timestamp,
                 out.append(run_execute(conn, mkt, s.session, src, cfg, now, broker=broker, dry_run=dry_run))
         except Exception as e:  # keep the other market going
             out.append(f"{mkt.code} {s.session} FAILED: {e!r}")
+    kst = now.tz_convert("Asia/Seoul")
+    if kst.time() >= REPORT_AT and db.run_status(conn, "report", "ALL", kst.strftime("%Y-%m-%d")) not in ("OK", "SKIPPED"):
+        try:
+            out.append(run_report(conn, now, fx=fx))
+        except Exception as e:
+            out.append(f"report FAILED: {e!r}")
     return out
 
 
@@ -350,6 +398,9 @@ def main() -> None:
         p.add_argument("--force", action="store_true")
     sub.add_parser("tick")
     sub.add_parser("status")
+    p = sub.add_parser("report", help="daily report (sent to Telegram; --print to only show it)")
+    p.add_argument("--print", dest="print_only", action="store_true")
+    p.add_argument("--force", action="store_true")
     p = sub.add_parser("config", help="choose broker and order submission")
     p.add_argument("--broker", choices=["sim", "kis"])
     p.add_argument("--submit", action=argparse.BooleanOptionalAction,
@@ -380,6 +431,9 @@ def main() -> None:
         return
     if a.cmd == "status":
         print(status(conn))
+        return
+    if a.cmd == "report":
+        print(run_report(conn, now, force=a.force or a.print_only, send=not a.print_only))
         return
     if a.cmd == "config":
         t = trading_settings(conn) | {k: v for k, v in (("broker", a.broker), ("submit", a.submit),

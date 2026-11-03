@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS orders (
     qty             INTEGER NOT NULL,
     ref_price       REAL NOT NULL,
     limit_price     REAL NOT NULL,
+    filled_qty      INTEGER NOT NULL DEFAULT 0,
     fill_price      REAL,
     cost            REAL,
     status          TEXT NOT NULL,      -- PLANNED | SUBMITTED | PARTIAL | FILLED | CANCELLED | REJECTED
@@ -275,8 +276,8 @@ def save_order(conn: sqlite3.Connection, order: dict) -> None:
     with conn:
         conn.execute(
             "INSERT OR REPLACE INTO orders (session_date, market, ticker, side, step, qty, ref_price, limit_price, "
-            "fill_price, cost, status, broker_order_no, created_at, error) VALUES (:session_date, :market, "
-            ":ticker, :side, :step, :qty, :ref_price, :limit_price, :fill_price, :cost, :status, "
+            "filled_qty, fill_price, cost, status, broker_order_no, created_at, error) VALUES (:session_date, "
+            ":market, :ticker, :side, :step, :qty, :ref_price, :limit_price, :filled_qty, :fill_price, :cost, :status, "
             ":broker_order_no, :created_at, :error)",
-            {"step": 0, "fill_price": None, "cost": None, "broker_order_no": None, "error": None,
+            {"step": 0, "filled_qty": 0, "fill_price": None, "cost": None, "broker_order_no": None, "error": None,
              "created_at": now_iso(), **order})
