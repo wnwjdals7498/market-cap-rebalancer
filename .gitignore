@@ -8,3 +8,6 @@ results/*.csv
 *.db-journal
 logs/
 .omc/
+.env
+.env.*
+!.env.example
