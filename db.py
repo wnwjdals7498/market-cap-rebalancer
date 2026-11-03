@@ -4,12 +4,15 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from strategy import LeaderState
 
 DEFAULT_DB = Path(__file__).parent / "mcr.db"
+# A RUNNING row older than this belongs to a process that died (PC slept, task killed). Longer than
+# any job: execute's price ladder takes at most ~30 min; the scheduled task is capped at 45 min.
+STALE_RUN = timedelta(minutes=60)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -129,15 +132,23 @@ def set_setting(conn: sqlite3.Connection, key: str, value) -> None:
 
 # --- runs (idempotency) -----------------------------------------------------
 
-def claim_run(conn: sqlite3.Connection, job: str, market: str, session_date: str, force: bool = False) -> bool:
-    """Marks a job RUNNING. False if it already finished OK/SKIPPED (or is running) for that session."""
-    row = conn.execute("SELECT status FROM runs WHERE job = ? AND market = ? AND session_date = ?",
+def claim_run(conn: sqlite3.Connection, job: str, market: str, session_date: str, force: bool = False,
+              now: datetime | None = None) -> bool:
+    """Marks a job RUNNING. False if it already finished (OK/SKIPPED/PARTIAL) or is still running for
+    that session. FAILED runs and RUNNING rows older than STALE_RUN may be claimed again."""
+    now = now or datetime.now(timezone.utc)
+    row = conn.execute("SELECT status, started_at FROM runs WHERE job = ? AND market = ? AND session_date = ?",
                        (job, market, session_date)).fetchone()
-    if row and row["status"] != "FAILED" and not force:
-        return False
+    if row and not force:
+        if row["status"] == "RUNNING":
+            if now - datetime.fromisoformat(row["started_at"]) < STALE_RUN:
+                return False
+        elif row["status"] != "FAILED":
+            return False
     with conn:
         conn.execute("INSERT OR REPLACE INTO runs (job, market, session_date, started_at, status) "
-                     "VALUES (?, ?, ?, ?, 'RUNNING')", (job, market, session_date, now_iso()))
+                     "VALUES (?, ?, ?, ?, 'RUNNING')",
+                     (job, market, session_date, now.isoformat(timespec="seconds")))
     return True
 
 

@@ -253,7 +253,7 @@ def tick(conn: sqlite3.Connection, src: Source, cfg: Config, now: pd.Timestamp,
             if now >= s.signal and db.run_status(conn, "signal", mkt.code, s.session) not in ("OK", "SKIPPED"):
                 out.append(run_signal(conn, mkt, s.session, src, cfg, now, broker=broker))
             if now >= s.execute and now < s.close - timedelta(minutes=15) \
-                    and db.run_status(conn, "execute", mkt.code, s.session) != "OK":
+                    and db.run_status(conn, "execute", mkt.code, s.session) not in ("OK", "PARTIAL"):
                 out.append(run_execute(conn, mkt, s.session, src, cfg, now, broker=broker, dry_run=dry_run))
         except Exception as e:  # keep the other market going
             out.append(f"{mkt.code} {s.session} FAILED: {e!r}")

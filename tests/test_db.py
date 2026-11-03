@@ -31,3 +31,16 @@ def test_positions_and_shares(tmp_path):
     db.save_shares(conn, "2026-10-26", {"AAPL": 1.0e9}, "test")
     db.save_shares(conn, "2026-10-27", {"AAPL": 1.1e9}, "test")
     assert db.latest_shares(conn, ["AAPL", "MSFT"], before="2026-10-26") == {"AAPL": ("2026-10-26", 1.0e9)}
+
+
+def test_stale_running_run_can_be_reclaimed(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    conn = db.connect(tmp_path / "t.db")
+    t0 = datetime(2026, 11, 3, 3, 0, tzinfo=timezone.utc)
+    assert db.claim_run(conn, "execute", "KR", "2026-11-03", now=t0)
+    # process died without finish_run: blocked while it could still be alive...
+    assert not db.claim_run(conn, "execute", "KR", "2026-11-03", now=t0 + timedelta(minutes=59))
+    # ...then retried
+    assert db.claim_run(conn, "execute", "KR", "2026-11-03", now=t0 + timedelta(minutes=61))
+    db.finish_run(conn, "execute", "KR", "2026-11-03", "PARTIAL")
+    assert not db.claim_run(conn, "execute", "KR", "2026-11-03", now=t0 + timedelta(hours=5))
