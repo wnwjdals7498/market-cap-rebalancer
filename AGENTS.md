@@ -40,7 +40,7 @@
 | `db.py` | SQLite 스키마와 접근 함수 |
 | `notify.py` | 텔레그램 알림 (설정 없으면 꺼짐, 예외를 밖으로 던지지 않음) |
 | `report.py` | 일일 보고 텍스트 (SQLite 만 읽음) |
-| `webreport.py` | 웹 리포트 (단일 HTML, 인라인 SVG 차트, 로컬 서버) |
+| `webreport.py` | 웹 리포트 (단일 HTML, 인라인 SVG 차트, 로컬 서버: 읽기 전용, `/version` 폴링으로 자동 갱신) |
 | `jobs.py` | CLI: init / signal / execute / tick / status / config / report / web |
 
 - 전략 규칙을 바꾸면 `strategy.py` 만 고치고, 백테스트를 다시 돌려 `results/summary.md` 갱신, README 규칙 표 갱신까지 같은 커밋에. 백테스트와 실운용 규칙이 갈라지면 백테스트 결과가 의미를 잃는다.
@@ -55,5 +55,5 @@
 
 - 실계좌 주문 코드(2단계, KIS Open API)는 기본 `DRY_RUN`, 모의투자 서버부터. 실전 주문을 보내는 실행은 사용자 확인 없이 하지 않는다.
 - API 키·시크릿·계좌번호를 코드, 커밋, SQLite, 로그에 넣지 않는다. 환경변수 또는 OS 자격 증명 저장소를 쓴다.
-- Windows 작업 스케줄러 등록(`scripts/register_task.ps1`) 등 PC 설정 변경은 사용자 확인 후.
+- Windows 작업 스케줄러 등록(`scripts/register_task.ps1`, `scripts/register_web.ps1`) 등 PC 설정 변경은 사용자 확인 후.
 - `mcr.db`(실사용 모의 계좌 기록)를 지우거나 덮어쓰지 않는다.

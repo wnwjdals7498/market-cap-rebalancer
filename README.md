@@ -144,17 +144,50 @@ powershell -ExecutionPolicy Bypass -File scripts\register_task.ps1 -Unregister
 - 평가는 마지막 보유 스냅샷(체결 시점 가격) 기준. 입출금이 있으면 직전/누적 수익률이 그만큼 왜곡됨.
 - 미리보기: `jobs.py report --print`, 즉시 전송: `jobs.py report --force`.
 
-## 웹 리포트
+## 웹 리포트 (실시간 현황)
+
+열어 둔 페이지는 5초마다 SQLite 변경을 확인해서, 작업(signal/execute/report)이 DB 에 기록하면 새로고침 없이 바로 갱신된다. 스크롤 위치와 펼친 표는 유지. 제목 옆 배지가 상태를 보여 줌: `실시간 · 12:00:05 확인` / `서버 연결 끊김 · 재시도 중`(서버가 다시 뜨면 스스로 복구).
+
+### 여는 방법
+
+**1. 항상 켜두기 (권장)** — 로그온할 때 자동 시작, 죽으면 1분 뒤 재시작, 창 없음:
 
 ```bash
-.venv/Scripts/python jobs.py web --serve      # http://127.0.0.1:8765/  (요청마다 SQLite 에서 새로 생성)
-.venv/Scripts/python jobs.py web              # site/index.html 만 생성 (외부 파일 없는 단일 HTML)
+powershell -ExecutionPolicy Bypass -File scripts/register_web.ps1
 ```
 
-- 구성: 총자산·직전/누적 변화·환율 카드, 총자산 추이 차트(일일 보고가 쌓는 `equity` 기록), 시장별 보유 vs 목표 비중, 최근 체결, 시총 상위 3 추이, 주문 내역, 작업 기록.
+등록 즉시 서버가 뜬다. 브라우저에서 http://127.0.0.1:8765/ 를 열어 두면 끝 (즐겨찾기 추천). 끄기/삭제:
+
+```bash
+powershell -Command "Stop-ScheduledTask MarketCapRebalancerWeb"
+powershell -ExecutionPolicy Bypass -File scripts/register_web.ps1 -Unregister
+```
+
+**2. 필요할 때만** — 터미널을 연 동안만 켜짐 (Ctrl+C 로 종료):
+
+```bash
+.venv/Scripts/python jobs.py web --serve
+```
+
+**3. 파일로만** — `site/index.html` 생성 (외부 파일 없는 단일 HTML, 자동 갱신 없음). 매일 08:00 보고 때도 갱신됨:
+
+```bash
+.venv/Scripts/python jobs.py web
+```
+
+- 다른 DB 를 보려면 `jobs.py --db <경로> web --serve --port 8766` (포트를 바꾸면 동시에 여러 개).
+- 이미 켜진 포트로 또 실행하면 `cannot listen on 127.0.0.1:8765 ... already running?` 메시지로 종료. 그냥 브라우저로 열면 됨.
+- 서버는 DB 를 읽기 전용으로 열어 매매 작업의 쓰기를 막지 않는다. DB 가 없거나 읽기 실패면 안내 문구를 보여 주고 계속 재시도.
+
+### 화면 구성
+
+- 총자산·직전/누적 변화·환율 카드, 총자산 추이 차트(일일 보고가 쌓는 `equity` 기록), 시장별 보유 vs 목표 비중, 최근 체결, 시총 상위 3 추이, 주문 내역, 작업 기록.
 - 차트: 마우스를 올리면 날짜별 값, `표로 보기` 로 숫자 표. 라이트/다크 모드 자동.
-- 매일 08:00 보고 때 `site/index.html` 도 갱신 (git-ignore).
-- 기본은 이 PC 에서만 접속 (`127.0.0.1`). 페이지에 로그인 기능이 없으므로 `--host 0.0.0.0` 으로 열면 같은 네트워크의 누구나 계좌 정보를 볼 수 있음.
+- 평가 금액은 마지막 signal/execute 시점 가격 기준 (서버가 시세를 따로 조회하지 않음).
+
+### 보안
+
+기본은 이 PC 에서만 접속 (`127.0.0.1`). 페이지에 로그인 기능이 없으므로 `--host 0.0.0.0` 으로 열면 같은 네트워크의 누구나 계좌 정보를 볼 수 있음. 휴대폰에서 보려면 Tailscale 같은 사설망을 먼저.
 
 ## SQLite (`mcr.db`)
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 
@@ -57,10 +58,12 @@ border-radius:8px;padding:6px 8px;font-size:12px;box-shadow:0 2px 8px rgba(0,0,0
 .legend b{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
 details{margin-top:8px}summary{cursor:pointer;color:var(--text-secondary);font-size:12px}
 .empty{color:var(--muted);padding:24px 0;text-align:center}
+#live{margin-left:6px}
 @media (max-width:560px){.barcol{display:none}th,td{padding:6px 5px}}
 """
 
 JS = """
+function initCharts(){
 document.querySelectorAll('.chart[data-series]').forEach(function(el){
   var d=JSON.parse(el.dataset.series), svg=el.querySelector('svg'), tip=el.querySelector('.tip'),
       cross=svg.querySelector('.cross'), W=+svg.getAttribute('viewBox').split(' ')[2];
@@ -76,7 +79,38 @@ document.querySelectorAll('.chart[data-series]').forEach(function(el){
   });
   svg.addEventListener('mouseleave',function(){tip.style.display='none'; cross.style.display='none'});
 });
+}
+initCharts();
+// Served page: poll /version and swap in the new page when SQLite changes (scroll and open tables kept).
+(function(){
+  var ver=document.body.dataset.version;
+  if(!ver||location.protocol.indexOf('http')!==0) return;
+  function stamp(ok){
+    var el=document.getElementById('live'); if(!el) return;
+    el.className='pill '+(ok?'good':'critical');
+    var t=new Date(), p=function(n){return (n<10?'0':'')+n};
+    el.textContent=ok?'실시간 · '+p(t.getHours())+':'+p(t.getMinutes())+':'+p(t.getSeconds())+' 확인'
+                     :'서버 연결 끊김 · 재시도 중';
+  }
+  function swap(){
+    return fetch('/',{cache:'no-store'}).then(function(r){return r.text()}).then(function(h){
+      var doc=new DOMParser().parseFromString(h,'text/html'), main=doc.querySelector('main');
+      if(!main) return;
+      var open=[].map.call(document.querySelectorAll('main details'),function(d){return d.open});
+      document.querySelector('main').replaceWith(main);
+      [].forEach.call(document.querySelectorAll('main details'),function(d,i){if(open[i]) d.open=true});
+      ver=doc.body.dataset.version; document.body.dataset.version=ver; initCharts();
+    });
+  }
+  function poll(){
+    fetch('/version',{cache:'no-store'}).then(function(r){if(!r.ok) throw r; return r.text()})
+      .then(function(v){return v.trim()!==ver?swap():null}).then(function(){stamp(true)},function(){stamp(false)})
+      .then(function(){setTimeout(poll,%(poll_ms)d)});
+  }
+  stamp(true); setTimeout(poll,%(poll_ms)d);
+})();
 """
+POLL_MS = 5000
 
 
 def esc(v) -> str:
@@ -195,7 +229,9 @@ def market_card(conn: sqlite3.Connection, market: str) -> str:
             f'<div class="sub" style="margin:0 0 6px">{esc(rank)}</div>{chart}</section>')
 
 
-def build_html(conn: sqlite3.Connection, usdkrw: float | None = None) -> str:
+def build_html(conn: sqlite3.Connection, usdkrw: float | None = None, version: str | None = None) -> str:
+    """version: the served page's SQLite version (see db_version); the page polls /version and refreshes
+    itself when it changes. None (a written file) = static page."""
     eq = conn.execute("SELECT * FROM equity ORDER BY date").fetchall()
     kr_val, us_val = report.pocket_values(conn)
     rate = usdkrw or (eq[-1]["usdkrw"] if eq else None)
@@ -242,14 +278,16 @@ def build_html(conn: sqlite3.Connection, usdkrw: float | None = None) -> str:
     generated = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
     return f"""<!doctype html><html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>투자 리포트</title>
-<style>{CSS % {"light": light, "dark": dark}}</style></head><body><main>
-<h1>투자 리포트</h1><p class="sub">시총 1위 + 채권 ETF 리밸런싱 · 생성 {esc(generated)} · 평가는 마지막 체결 시점 가격</p>
+<style>{CSS % {"light": light, "dark": dark}}</style></head>
+<body{f' data-version="{esc(version)}"' if version else ""}><main>
+<h1>투자 리포트</h1><p class="sub">시총 1위 + 채권 ETF 리밸런싱 · 생성 {esc(generated)} · 평가는 마지막 체결 시점 가격
+{'<span id="live" class="pill good"></span>' if version else ""}</p>
 <div class="tiles">{tile_html}</div>
 <section class="card"><h2>총자산 추이 (원화 환산)</h2>{equity_chart}</section>
 <div class="grid2">{market_card(conn, "KR")}{market_card(conn, "US")}</div>
 <section class="card" style="margin-top:16px"><h2>주문 내역</h2>{orders_html}</section>
 <section class="card"><h2>작업 기록</h2>{runs_html}</section>
-</main><script>{JS}</script></body></html>"""
+</main><script>{JS % {"poll_ms": POLL_MS}}</script></body></html>"""
 
 
 def write_site(conn: sqlite3.Connection, out_dir, usdkrw: float | None = None):
@@ -262,30 +300,78 @@ def write_site(conn: sqlite3.Connection, out_dir, usdkrw: float | None = None):
     return path
 
 
-def serve(db_path, host: str = "127.0.0.1", port: int = 8765) -> None:
-    """Serves the page, rebuilt from SQLite on every request (always current, no files to refresh)."""
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+def db_version(db_path) -> str:
+    """Changes whenever a job commits to the database (file size/mtime incl. WAL and rollback journal)."""
+    from pathlib import Path
+    parts = []
+    for suffix in ("", "-wal", "-journal"):
+        p = Path(f"{db_path}{suffix}")
+        if p.exists():
+            st = p.stat()
+            parts.append(f"{st.st_mtime_ns:x}.{st.st_size:x}")
+    return "-".join(parts) or "none"
 
-    import db
+
+def render(db_path) -> str:
+    """The served page. Opened read-only, so the server never blocks a trading job's writes."""
+    from pathlib import Path
+    version = db_version(db_path)
+    if not Path(db_path).exists():
+        return _message_page(f"DB 없음: {db_path} — jobs.py init 으로 먼저 만드세요.", version)
+    conn = sqlite3.connect(f"{Path(db_path).resolve().as_uri()}?mode=ro", uri=True, timeout=5)
+    conn.row_factory = sqlite3.Row
+    try:
+        return build_html(conn, version=version)
+    except sqlite3.Error as e:  # e.g. a DB from an older schema, or locked past the timeout
+        return _message_page(f"DB 읽기 실패: {e}", version)
+    finally:
+        conn.close()
+
+
+def _message_page(text: str, version: str) -> str:
+    """Keeps polling, so the page recovers by itself once the DB is there."""
+    return (f'<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>투자 리포트</title>'
+            f'<style>{CSS % {"light": "", "dark": ""}}</style></head><body data-version="{esc(version)}"><main>'
+            f'<h1>투자 리포트</h1><p class="sub"><span id="live" class="pill good"></span></p>'
+            f'<div class="card empty">{esc(text)}</div></main><script>{JS % {"poll_ms": POLL_MS}}</script>'
+            f'</body></html>')
+
+
+def make_server(db_path, host: str = "127.0.0.1", port: int = 8765):
+    """GET / = the page rebuilt from SQLite on every request, GET /version = db_version (the page polls it)."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            if self.path not in ("/", "/index.html"):
+            path = self.path.split("?")[0]
+            if path in ("/", "/index.html"):
+                body, ctype = render(db_path).encode("utf-8"), "text/html; charset=utf-8"
+            elif path == "/version":
+                body, ctype = db_version(db_path).encode(), "text/plain"
+            else:
                 self.send_error(404)
                 return
-            conn = db.connect(db_path)
-            try:
-                body = build_html(conn).encode("utf-8")
-            finally:
-                conn.close()
             self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
 
         def log_message(self, *args):  # keep the console quiet
             pass
 
-    print(f"serving http://{host}:{port}/  (Ctrl+C to stop)")
-    ThreadingHTTPServer((host, port), Handler).serve_forever()
+    class Server(ThreadingHTTPServer):
+        allow_reuse_address = os.name != "nt"  # on Windows SO_REUSEADDR would let a second server share the port
+        daemon_threads = True
+
+    return Server((host, port), Handler)
+
+
+def serve(db_path, host: str = "127.0.0.1", port: int = 8765) -> None:
+    try:
+        server = make_server(db_path, host, port)
+    except OSError as e:  # most often: already running (scheduled task or another terminal)
+        raise SystemExit(f"cannot listen on {host}:{port} ({e.strerror}); already running? open http://{host}:{port}/")
+    print(f"serving http://{host}:{port}/  (Ctrl+C to stop; an open page refreshes itself when the DB changes)")
+    server.serve_forever()
