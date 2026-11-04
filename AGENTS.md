@@ -42,6 +42,7 @@
 | `report.py` | 일일 보고 텍스트 (SQLite 만 읽음) |
 | `webreport.py` | 웹 리포트 (단일 HTML, 인라인 SVG 차트, 로컬 서버: 읽기 전용, `/version` 폴링으로 자동 갱신) |
 | `jobs.py` | CLI: init / signal / execute / tick / status / config / report / web |
+| `scripts/`, `deploy/` | 자동 실행 등록: Windows 작업 스케줄러 / Linux systemd (`deploy/DEPLOY.md`) |
 
 - 전략 규칙을 바꾸면 `strategy.py` 만 고치고, 백테스트를 다시 돌려 `results/summary.md` 갱신, README 규칙 표 갱신까지 같은 커밋에. 백테스트와 실운용 규칙이 갈라지면 백테스트 결과가 의미를 잃는다.
 - 전략 수치(비율, 일수, 수수료)는 `Config` 필드로 추가한다. 코드에 상수로 박지 않는다.
@@ -49,11 +50,12 @@
 - 새 데이터 소스(KRX, SEC, KIS 시세 등)는 `Source` 를 구현해 추가한다. `jobs.py` 에 소스별 분기를 넣지 않는다.
 - 데이터 검증(오래된 시세 40분, 주식수 ±20%, 시총 ±40%)은 완화하지 않는다. 바꿔야 하면 이유를 커밋 본문에 쓴다. 잘못된 시총 하나가 1위 교체 → 실제 매매로 이어진다.
 - `runs` 테이블의 1세션 1회 실행 보장을 우회하지 않는다. 같은 날 두 번 돌면 3일 확정 카운트가 두 번 올라간다.
+- 실행 방식(CLI 인자, 실행 주기, 시간 제한, 웹 포트)을 바꾸면 Windows 스크립트와 `deploy/systemd/*`, `deploy/DEPLOY.md` 를 같이 고친다. 서버로 옮길 때 그대로 적용돼야 한다.
 - 주석·문서 밀도와 언어는 주변 코드를 따른다 (설정 필드 설명은 한국어, docstring 은 영어).
 
 ## 금지 / 사용자 확인 필요
 
 - 실계좌 주문 코드(2단계, KIS Open API)는 기본 `DRY_RUN`, 모의투자 서버부터. 실전 주문을 보내는 실행은 사용자 확인 없이 하지 않는다.
 - API 키·시크릿·계좌번호를 코드, 커밋, SQLite, 로그에 넣지 않는다. 환경변수 또는 OS 자격 증명 저장소를 쓴다.
-- Windows 작업 스케줄러 등록(`scripts/register_task.ps1`, `scripts/register_web.ps1`) 등 PC 설정 변경은 사용자 확인 후.
+- 스케줄러·서비스 등록(Windows `scripts/register_*.ps1`, Linux `deploy/install.sh`) 등 PC·서버 설정 변경은 사용자 확인 후.
 - `mcr.db`(실사용 모의 계좌 기록)를 지우거나 덮어쓰지 않는다.

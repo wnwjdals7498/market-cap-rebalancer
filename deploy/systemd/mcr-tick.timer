@@ -1,0 +1,12 @@
+[Unit]
+Description=market-cap-rebalancer: jobs.py tick every 5 minutes
+
+[Timer]
+OnCalendar=*:0/5
+AccuracySec=30s
+# after a reboot, run once right away if a tick was missed
+Persistent=true
+Unit=mcr-tick.service
+
+[Install]
+WantedBy=timers.target

@@ -18,7 +18,9 @@ from dotenv import dotenv_values
 ENV_FILE = Path(__file__).with_name(".env")
 BASES = {"paper": "https://openapivts.koreainvestment.com:29443",
          "real": "https://openapi.koreainvestment.com:9443"}
-TOKEN_DIR = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "market-cap-rebalancer"
+# Windows: %LOCALAPPDATA%, Linux servers: $XDG_CACHE_HOME or ~/.cache
+TOKEN_DIR = Path(os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_CACHE_HOME")
+                 or Path.home() / ".cache") / "market-cap-rebalancer"
 TOKEN_MIN_LEFT = 3600        # re-issue when less than this many seconds remain
 DEFAULT_PRODUCT_CODE = "01"  # 종합계좌 주식
 
@@ -91,8 +93,9 @@ def get_token(creds: KisCredentials, now: float | None = None, post=requests.pos
         raise KisAuthError(f"token request failed ({r.status_code}): {reason}")
 
     expires_at = now + int(body.get("expires_in", 86400))
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     path.write_text(json.dumps({"access_token": body["access_token"], "expires_at": expires_at}), encoding="utf-8")
+    path.chmod(0o600)  # owner only on a Linux server; on Windows it just keeps the file writable
     return body["access_token"], expires_at
 
 

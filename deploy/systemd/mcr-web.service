@@ -1,0 +1,21 @@
+# Web report server (live status page). Listens on 127.0.0.1 only: the page has no login.
+# Reach it through an SSH tunnel or a private network, see deploy/DEPLOY.md.
+# @REPO@ / @USER@ are filled in by deploy/install.sh.
+[Unit]
+Description=market-cap-rebalancer: web report on 127.0.0.1:8765
+After=network.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@REPO@
+Environment=PYTHONUNBUFFERED=1 PYTHONIOENCODING=utf-8 PYTHONWARNINGS=ignore
+ExecStart=@REPO@/.venv/bin/python jobs.py web --serve --host 127.0.0.1 --port 8765
+Restart=always
+RestartSec=60
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

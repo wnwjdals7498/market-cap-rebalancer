@@ -53,6 +53,8 @@ powershell -ExecutionPolicy Bypass -File scripts\register_task.ps1
 powershell -ExecutionPolicy Bypass -File scripts\register_task.ps1 -Unregister
 ```
 
+외부 리눅스 서버에서 24시간 돌리려면 [deploy/DEPLOY.md](deploy/DEPLOY.md) (systemd 타이머 + 웹 서버, `sudo deploy/install.sh`).
+
 ### signal 이 하는 일
 1. 발행주식수 하루 1회 갱신 (`impliedSharesOutstanding`, 전체 주식 클래스). 전일 대비 ±20% 넘게 변하면 거부.
 2. 1분봉 현재가 조회. 오늘 장의 40분 이내 시세만 사용 (yfinance 한국 시세는 약 20분 지연).
@@ -178,6 +180,8 @@ powershell -ExecutionPolicy Bypass -File scripts/register_web.ps1 -Unregister
 - 다른 DB 를 보려면 `jobs.py --db <경로> web --serve --port 8766` (포트를 바꾸면 동시에 여러 개).
 - 이미 켜진 포트로 또 실행하면 `cannot listen on 127.0.0.1:8765 ... already running?` 메시지로 종료. 그냥 브라우저로 열면 됨.
 - 서버는 DB 를 읽기 전용으로 열어 매매 작업의 쓰기를 막지 않는다. DB 가 없거나 읽기 실패면 안내 문구를 보여 주고 계속 재시도.
+
+외부 서버에서는 `mcr-web.service` 가 같은 서버를 띄우고, SSH 터널로 접속한다: [deploy/DEPLOY.md](deploy/DEPLOY.md) 5번.
 
 ### 화면 구성
 

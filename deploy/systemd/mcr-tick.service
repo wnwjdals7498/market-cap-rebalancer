@@ -1,0 +1,19 @@
+# Runs one `jobs.py tick`: signal/execute/report jobs that are due (exchange calendars decide, server TZ irrelevant).
+# Started every 5 minutes by mcr-tick.timer; systemd never starts it twice at once (= Windows IgnoreNew).
+# @REPO@ / @USER@ are filled in by deploy/install.sh.
+[Unit]
+Description=market-cap-rebalancer: jobs.py tick
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@REPO@
+Environment=PYTHONUNBUFFERED=1 PYTHONIOENCODING=utf-8 PYTHONWARNINGS=ignore
+ExecStart=@REPO@/.venv/bin/python jobs.py tick
+# execute's price ladder can take ~6 min per ticker; a run killed anyway stays RUNNING and is retried (db.STALE_RUN)
+TimeoutStartSec=45min
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
