@@ -152,9 +152,7 @@ powershell -ExecutionPolicy Bypass -File scripts\register_task.ps1 -Unregister
 
 열어 둔 페이지는 5초마다 SQLite 변경을 확인해서, 작업(signal/execute/report)이 DB 에 기록하면 새로고침 없이 바로 갱신된다. 스크롤 위치와 펼친 표는 유지. 제목 옆 배지가 상태를 보여 줌: `실시간 · 12:00:05 확인` / `서버 연결 끊김 · 재시도 중`(서버가 다시 뜨면 스스로 복구).
 
-설정 화면은 http://127.0.0.1:8765/app/ 에서 연다. `.env` 의 `MCR_API_TOKEN` 에 토큰을 설정하고 화면에 입력한다. 토큰은 `python -c "import secrets; print(secrets.token_urlsafe(32))"` 로 생성한다. 설정 변경은 다음 tick(최대 5분 뒤)부터 적용된다.
-
-설정 화면을 사용하려면 프런트엔드 코드가 포함된 상태에서 Node 20.19 이상 21 미만 또는 22.12 이상이 필요하다. 배포할 때 `cd frontend && npm ci && npm run build` 로 화면을 빌드한다. 실행 중에는 Node 가 필요 없다.
+같은 서버가 설정 화면(http://127.0.0.1:8765/app/)과 설정 API(`/api/v1`)도 제공한다. 준비와 사용법은 아래 [웹 설정](#웹-설정-브라우저에서-설정-바꾸기) 절.
 
 ### 여는 방법
 
@@ -232,7 +230,8 @@ npm run lint && npm run typecheck && npm test -- --run && npm run build
 
 | 테이블 | 내용 |
 |---|---|
-| `settings` | 전략 설정 (JSON) |
+| `settings` | 전략 설정·운용 설정(trading, paused) (JSON) |
+| `settings_log` | 설정 변경 이력 (웹·CLI, 이전 값·새 값·출처) |
 | `shares` | 일별 발행주식수 |
 | `snapshots` | signal 시점 현재가·주식수·시총·검증 플래그 |
 | `rankings` | 시장별 시총 순위 |
