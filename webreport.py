@@ -232,7 +232,8 @@ def market_card(conn: sqlite3.Connection, market: str) -> str:
 def build_html(conn: sqlite3.Connection, usdkrw: float | None = None, version: str | None = None) -> str:
     """version: the served page's SQLite version (see db_version); the page polls /version and refreshes
     itself when it changes. None (a written file) = static page."""
-    eq = conn.execute("SELECT * FROM equity ORDER BY date").fetchall()
+    # total 0 = account not synced yet (broker=kis starts from CASH 0 until a submitted execute): no history point
+    eq = conn.execute("SELECT * FROM equity WHERE total > 0 ORDER BY date").fetchall()
     kr_val, us_val = report.pocket_values(conn)
     rate = usdkrw or (eq[-1]["usdkrw"] if eq else None)
     total = kr_val + us_val * rate if rate and kr_val is not None and us_val is not None else None

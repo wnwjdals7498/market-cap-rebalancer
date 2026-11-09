@@ -299,7 +299,7 @@ def run_report(conn: sqlite3.Connection, now: pd.Timestamp, fx=report.fetch_usdk
         if total is not None:
             entry = {"date": day, "total": total, "runs_rowid": seen}
             db.set_setting(conn, "report:last", entry)
-            if first is None:
+            if not (first and first.get("total")):  # a total-0 report (empty account) is no 누적 baseline
                 db.set_setting(conn, "report:first", entry)
         return "OK", ("sent" if ok else "not sent (telegram off or failed)") +             (f"; total {total:,.0f}" if total is not None else "")
 

@@ -243,6 +243,27 @@ def test_web_report_page(env, tmp_path):
     assert "<title>투자 리포트</title>" in webreport.write_site(conn, tmp_path / "site").read_text(encoding="utf-8")
 
 
+def test_empty_account_report_is_not_a_baseline(tmp_path, no_real_alerts):
+    """broker=kis starts from `init --usd 0 --krw 0`: SQLite holds CASH 0 until a submitted execute syncs the
+    account, so the first reports total 0. That must not break the web page or pin the 누적 baseline at 0."""
+    import webreport
+    conn, src, cfg = db.connect(tmp_path / "z.db"), FakeSource(), Config(us_fee=0)
+    for m in ("US", "KR"):
+        db.save_positions(conn, "2026-10-26", m, {CASH: 0.0}, {})
+    jobs.run_report(conn, pd.Timestamp("2026-10-26 17:15", tz="Asia/Seoul"), fx=lambda: 1400.0)
+    assert "누적" not in webreport.build_html(conn)  # renders (no ZeroDivisionError), no 0-based tiles
+
+    db.save_positions(conn, "2026-10-27", "US", {CASH: 100_000.0}, {})
+    run_day(conn, src, cfg, "2026-10-27", {"AAPL": 5000, "NVDA": 4900})
+    jobs.run_report(conn, pd.Timestamp("2026-10-28 08:05", tz="Asia/Seoul"), fx=lambda: 1400.0)
+    run_day(conn, src, cfg, "2026-10-28", {"AAPL": 5000, "NVDA": 4900})
+    no_real_alerts.clear()
+    jobs.run_report(conn, pd.Timestamp("2026-10-29 08:05", tz="Asia/Seoul"), fx=lambda: 1414.0)
+    assert "누적 +1.00%" in no_real_alerts[0]  # first non-zero report (10-28) is the baseline
+    page = webreport.build_html(conn)
+    assert "2026-10-28 부터" in page and "+1.00%" in page
+
+
 def test_served_page_tracks_db_changes(env, tmp_path):
     import threading
     import urllib.request
