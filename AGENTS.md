@@ -23,6 +23,13 @@
 .venv/Scripts/python jobs.py --db <임시경로> ... # 수동 실험은 임시 DB 로. 실사용 mcr.db 를 건드리지 않는다
 ```
 
+프런트엔드는 `frontend/` 에서 (Node `^20.19.0 || >=22.12.0`, 처음 한 번 `npm ci`). 커밋 전 네 개 모두 종료 코드 0:
+
+```bash
+npm run lint && npm run typecheck && npm test -- --run && npm run build
+```
+
+- API(`api.py`)를 바꾸면 `.venv/bin/python scripts/export_openapi.py` 와 `npm run gen:api` 로 `frontend/openapi.json`, `src/api/schema.d.ts` 를 같이 갱신한다.
 - yfinance/pandas 경고가 많다. 출력 볼 때 `PYTHONWARNINGS=ignore PYTHONIOENCODING=utf-8`.
 - 테스트는 네트워크를 쓰지 않는다. `tests/conftest.py` 가 텔레그램 전송을 막는다 (`.env` 에 봇이 설정돼 있어도). 외부 데이터가 필요한 로직은 `tests/test_jobs.py` 의 `FakeSource` 처럼 `Source` 를 주입해 검증한다.
 
@@ -43,6 +50,7 @@
 | `notify.py` | 텔레그램 알림 (설정 없으면 꺼짐, 예외를 밖으로 던지지 않음) |
 | `report.py` | 일일 보고 텍스트 (SQLite 만 읽음) |
 | `webreport.py` | 웹 리포트 (단일 HTML, 인라인 SVG 차트, 로컬 서버: 읽기 전용, `/version` 폴링으로 자동 갱신) |
+| `frontend/` | 설정 웹 UI (React + Vite + TypeScript). `src/api/schema.d.ts` 는 `scripts/export_openapi.py` → `npm run gen:api` 생성물, `dist/` 는 git 에 넣지 않고 `api.py` 가 `/app/` 으로 서빙 |
 | `jobs.py` | CLI: init / signal / execute / tick / status / config / report / web |
 | `scripts/`, `deploy/` | 자동 실행 등록: Windows 작업 스케줄러 / Linux systemd (`deploy/DEPLOY.md`) |
 

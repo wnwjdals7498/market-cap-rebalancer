@@ -1,5 +1,5 @@
 import { vi } from 'vitest'
-import type { Settings, Status } from '../api/schema'
+import type { Settings, Status } from '../api/types'
 
 export const settings: Settings = {
   trading: { broker: 'sim', submit: false, allow_real: false },

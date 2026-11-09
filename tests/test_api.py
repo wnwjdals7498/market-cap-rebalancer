@@ -102,3 +102,12 @@ def test_settings_and_static_directory(client, tmp_path):
     c = TestClient(api.create_app(tmp_path / "static.db", TOKEN, web_dir=dist))
     assert "<title>설정</title>" in c.get("/app/").text
     assert client.get("/app/").status_code == 404
+
+
+def test_settings_ui_is_served(tmp_path):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<title>설정</title>", encoding="utf-8")
+    c = TestClient(api.create_app(tmp_path / "a.db", TOKEN, web_dir=dist))
+    assert "<title>설정</title>" in c.get("/app/").text
+    assert TestClient(api.create_app(tmp_path / "b.db", TOKEN, web_dir=tmp_path / "missing")).get("/app/").status_code == 404

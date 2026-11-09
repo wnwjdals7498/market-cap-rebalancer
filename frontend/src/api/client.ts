@@ -1,4 +1,5 @@
-import type { LogEntry, Order, Settings, SettingsPatch, Snapshot, Status } from './schema'
+import { API_PATHS } from './types'
+import type { LogEntry, Order, Settings, SettingsPatch, Snapshot, Status } from './types'
 
 export class UnauthorizedError extends Error {
   constructor() {
@@ -39,12 +40,12 @@ export function createClient(token: string) {
   }
 
   return {
-    getStatus: () => request<Status>('/api/v1/status'),
-    getSettings: () => request<Settings>('/api/v1/settings'),
+    getStatus: () => request<Status>(API_PATHS.status),
+    getSettings: () => request<Settings>(API_PATHS.settings),
     patchSettings: (body: SettingsPatch) =>
-      request<Snapshot>('/api/v1/settings', { method: 'PATCH', body: JSON.stringify(body) }),
-    getLog: (limit = 50) => request<LogEntry[]>(`/api/v1/settings/log?limit=${limit}`),
-    getOrders: (limit = 40) => request<Order[]>(`/api/v1/orders?limit=${limit}`),
+      request<Snapshot>(API_PATHS.settings, { method: 'PATCH', body: JSON.stringify(body) }),
+    getLog: (limit = 50) => request<LogEntry[]>(`${API_PATHS.log}?limit=${limit}`),
+    getOrders: (limit = 40) => request<Order[]>(`${API_PATHS.orders}?limit=${limit}`),
   }
 }
 

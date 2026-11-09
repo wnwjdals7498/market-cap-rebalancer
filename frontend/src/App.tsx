@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { UnauthorizedError, createClient, tokenStore, type Client } from './api/client'
-import type { Settings, Snapshot } from './api/schema'
+import type { Settings, Snapshot } from './api/types'
 import { ChangeLog } from './components/ChangeLog'
 import { StatusPanel } from './components/StatusPanel'
 import { StrategyPanel } from './components/StrategyPanel'

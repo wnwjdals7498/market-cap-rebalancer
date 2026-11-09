@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { UnauthorizedError, type Client } from '../api/client'
-import type { LogEntry } from '../api/schema'
+import type { LogEntry } from '../api/types'
 import { kst, showJson } from '../format'
 
 interface Props {

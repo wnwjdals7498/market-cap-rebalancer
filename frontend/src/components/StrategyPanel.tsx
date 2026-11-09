@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { Client } from '../api/client'
-import type { Limit, Settings, Snapshot } from '../api/schema'
+import type { Limit, Settings, Snapshot } from '../api/types'
 import { SaveNotice, useSave } from '../useSave'
 
 interface Props {

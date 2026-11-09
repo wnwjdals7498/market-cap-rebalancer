@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { UnauthorizedError, type Client } from './api/client'
-import type { SettingsPatch, Snapshot } from './api/schema'
+import type { SettingsPatch, Snapshot } from './api/types'
 
 /** PATCH 한 번의 진행·결과 상태. 401 은 onUnauthorized 로, 그 밖의 오류는 detail 문구로 보인다. */
 export function useSave(client: Client, onUnauthorized: () => void) {

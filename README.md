@@ -195,6 +195,35 @@ powershell -ExecutionPolicy Bypass -File scripts/register_web.ps1 -Unregister
 
 기본은 이 PC 에서만 접속 (`127.0.0.1`). 페이지에 로그인 기능이 없으므로 `--host 0.0.0.0` 으로 열면 같은 네트워크의 누구나 계좌 정보를 볼 수 있음. 휴대폰에서 보려면 Tailscale 같은 사설망을 먼저.
 
+## 웹 설정 (브라우저에서 설정 바꾸기)
+
+`jobs.py config` 대신 브라우저에서 broker·주문 전송(submit)·시장별 일시정지·전략 파라미터를 보고 바꾼다. 화면은 `/api/v1` 의 한 클라이언트(React + Vite + TypeScript)다.
+
+**준비 (한 번, 서버/PC 마다)** — Node `^20.19.0 || >=22.12.0` 이 필요하다 (빌드할 때만. 실행 중에는 필요 없다).
+
+```bash
+cd frontend && npm ci && npm run build      # frontend/dist/ 생성 (git 에 넣지 않는 생성물)
+```
+
+1. `.env` 에 `MCR_API_TOKEN` 을 넣는다 (`.env.example` 의 생성 방법 참고). 비어 있으면 API 는 503 으로 닫힌다.
+2. `jobs.py web --serve` 를 띄우고 http://127.0.0.1:8765/app/ 을 연다. 처음 한 번 토큰을 입력한다 — 이 탭의 `sessionStorage` 에만 보관되고 탭을 닫으면 지워진다.
+3. 화면 위에서 아래로: 상태(시장별 오늘 signal/execute 시각 KST, 일시정지, 최근 실행) → 운용(broker, 주문 전송, 일시정지) → 전략 파라미터 → 변경 이력.
+
+- **반영 시점 = 다음 tick (최대 5분 뒤).** 웹은 SQLite `settings` 만 바꾼다. 매매는 지금처럼 `tick` 이 하고, 웹 서버가 죽어도 돈다.
+- 주문 전송을 켤 때는 대화상자에 `SUBMIT` 을 직접 입력해야 한다. `allow_real` 은 웹에서 읽기 전용이다 (`jobs.py config --allow-real` 로만).
+- 전략 파라미터를 바꾸면 `results/summary.md` 의 백테스트(기본값 기준)와 비교할 수 없다.
+- 모든 변경은 변경 이력에 남고 텔레그램으로 알린다 (CLI 변경도 같다).
+
+개발:
+
+```bash
+cd frontend
+npm run dev                                  # Vite 개발 서버 (/api 는 127.0.0.1:8765 로 프록시)
+npm run lint && npm run typecheck && npm test -- --run && npm run build
+# API 가 바뀌면 타입 다시 생성
+(cd .. && .venv/bin/python scripts/export_openapi.py) && npm run gen:api
+```
+
 ## SQLite (`mcr.db`)
 
 | 테이블 | 내용 |

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { UnauthorizedError, type Client } from '../api/client'
-import type { Status } from '../api/schema'
+import type { Status } from '../api/types'
 import { kst } from '../format'
 
 const REFRESH_MS = 30_000
