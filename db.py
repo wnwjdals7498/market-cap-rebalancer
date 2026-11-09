@@ -19,6 +19,14 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL                 -- JSON
 );
+CREATE TABLE IF NOT EXISTS settings_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL,
+    key TEXT NOT NULL,
+    old TEXT,
+    new TEXT,
+    source TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS shares (     -- shares outstanding, refreshed once per day
     date   TEXT NOT NULL,
     ticker TEXT NOT NULL,
@@ -136,6 +144,15 @@ def get_setting(conn: sqlite3.Connection, key: str, default=None):
 def set_setting(conn: sqlite3.Connection, key: str, value) -> None:
     with conn:
         conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", (key, json.dumps(value)))
+
+
+def log_setting_change(conn: sqlite3.Connection, key: str, old, new, source: str) -> None:
+    conn.execute("INSERT INTO settings_log (at, key, old, new, source) VALUES (?, ?, ?, ?, ?)",
+                 (now_iso(), key, json.dumps(old), json.dumps(new), source))
+
+
+def setting_changes(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
+    return [dict(row) for row in conn.execute("SELECT * FROM settings_log ORDER BY id DESC LIMIT ?", (limit,))]
 
 
 # --- runs (idempotency) -----------------------------------------------------

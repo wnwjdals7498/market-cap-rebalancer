@@ -38,6 +38,8 @@
 | `kis_broker.py` | KIS 잔고·매수가능·주문·체결조회·취소 (`KisBroker`) |
 | `markets.py` | 시장 정의, 세션별 signal/execute 시각 |
 | `db.py` | SQLite 스키마와 접근 함수 |
+| `control.py` | 설정 조회·검증·변경·이력·알림 |
+| `api.py` | 설정 API와 기존 웹 리포트 제공 |
 | `notify.py` | 텔레그램 알림 (설정 없으면 꺼짐, 예외를 밖으로 던지지 않음) |
 | `report.py` | 일일 보고 텍스트 (SQLite 만 읽음) |
 | `webreport.py` | 웹 리포트 (단일 HTML, 인라인 SVG 차트, 로컬 서버: 읽기 전용, `/version` 폴링으로 자동 갱신) |
