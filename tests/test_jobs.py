@@ -1,6 +1,7 @@
 import pandas as pd
 import pytest
 
+import control
 import db
 import jobs
 from markets import MARKETS
@@ -285,3 +286,39 @@ def test_buys_capped_by_cash_are_ok_not_partial(env, no_real_alerts):
                            sleep=lambda s: None)
     assert db.run_status(conn, "execute", "US", "2026-10-26") == "OK"
     assert "cash-limited ['AAPL']" in out and not any("PARTIAL" in m for m in no_real_alerts)
+
+
+def test_paused_market_is_skipped_but_report_runs(env, no_real_alerts):
+    conn, src, cfg = env
+    set_day(src, "2026-10-27", {"AAPL": 5000, "NVDA": 4900})
+    src.quote_time = pd.Timestamp("2026-10-27 12:45", tz=NY)       # fresh for the 12:50 tick
+    at = pd.Timestamp("2026-10-27 12:50", tz=NY)                    # past US signal/execute; 01:50 KST, no report yet
+    control.update(conn, {"paused": {"US": True}}, "cli")
+    assert jobs.tick(conn, src, cfg, at, fx=lambda: 1400.0) == ["US paused"]
+    assert db.run_status(conn, "signal", "US", "2026-10-27") is None
+    control.update(conn, {"paused": {"US": False}}, "cli")
+    jobs.tick(conn, src, cfg, at, fx=lambda: 1400.0)
+    assert db.run_status(conn, "signal", "US", "2026-10-27") == "OK"
+    control.update(conn, {"paused": {"KR": True, "US": True}}, "cli")
+    out = jobs.tick(conn, src, cfg, pd.Timestamp("2026-10-28 08:05", tz="Asia/Seoul"), fx=lambda: 1400.0)
+    assert "KR paused" in out                                       # KR session 10-28 not closed yet
+    assert any(o.startswith("report ALL 2026-10-28") for o in out)  # pausing never stops the daily report
+
+
+def test_pause_cli_and_status(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "cli.db"
+
+    def run(*args):
+        monkeypatch.setattr(jobs.sys, "argv", ["jobs.py", "--db", str(path), *args])
+        jobs.main()
+        return capsys.readouterr().out
+
+    run("config", "--pause", "ALL")
+    assert "paused KR=True US=True" in run("status")
+    run("config", "--resume", "US")
+    assert "paused KR=True US=False" in run("status")
+    run("config", "--resume", "KR")
+    assert "paused KR=False US=False" in run("status")
+    conn = db.connect(path)
+    assert all(row["source"] == "cli" for row in db.setting_changes(conn))
+    conn.close()

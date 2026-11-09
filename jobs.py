@@ -314,9 +314,13 @@ def tick(conn: sqlite3.Connection, src: Source, cfg: Config, now: pd.Timestamp,
          broker: Broker | None = None, dry_run: bool = False, fx=report.fetch_usdkrw) -> list[str]:
     """Run whatever is due now. Safe to call every few minutes; runs table prevents repeats."""
     out = []
+    paused = control.paused(conn)
     for mkt in MARKETS.values():
         s = current_session(mkt, now)
         if s is None or now >= s.close:
+            continue
+        if paused[mkt.code]:
+            out.append(f"{mkt.code} paused")
             continue
         try:
             if now >= s.signal and db.run_status(conn, "signal", mkt.code, s.session) not in ("OK", "SKIPPED"):
@@ -374,7 +378,9 @@ def make_broker(conn: sqlite3.Connection) -> tuple[Broker | None, bool]:
 
 def status(conn: sqlite3.Connection) -> str:
     t = control.trading_settings(conn)
-    lines = [f"broker {t['broker']} submit={t['submit']} allow_real={t['allow_real']}"]
+    paused = control.paused(conn)
+    lines = [f"broker {t['broker']} submit={t['submit']} allow_real={t['allow_real']}",
+             f"paused KR={paused['KR']} US={paused['US']}"]
     for code in MARKETS:
         lines.append(f"[{code}]")
         for r in conn.execute("SELECT * FROM runs WHERE market = ? ORDER BY session_date DESC, job DESC LIMIT 4",
@@ -418,6 +424,9 @@ def main() -> None:
                    help="kis: actually send orders (default: record only, DRY_RUN)")
     p.add_argument("--allow-real", action=argparse.BooleanOptionalAction,
                    help="permit orders on a KIS_ENV=real account")
+    pause_group = p.add_mutually_exclusive_group()
+    pause_group.add_argument("--pause", choices=["KR", "US", "ALL"])
+    pause_group.add_argument("--resume", choices=["KR", "US", "ALL"])
     a = ap.parse_args()
 
     logs = Path(__file__).with_name("logs")
@@ -454,7 +463,12 @@ def main() -> None:
     if a.cmd == "config":
         changes = {k: v for k, v in (("broker", a.broker), ("submit", a.submit),
                                      ("allow_real", a.allow_real)) if v is not None}
-        t = control.update(conn, {"trading": changes}, "cli")["trading"]
+        updates = {"trading": changes}
+        market = a.pause or a.resume
+        if market:
+            codes = ("KR", "US") if market == "ALL" else (market,)
+            updates["paused"] = {code: bool(a.pause) for code in codes}
+        t = control.update(conn, updates, "cli")["trading"]
         print(f"trading settings: {t}")
         return
 
