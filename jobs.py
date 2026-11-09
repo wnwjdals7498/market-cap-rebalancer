@@ -25,6 +25,7 @@ import pandas as pd
 
 import data
 import db
+import control
 import notify
 import report
 import webreport
@@ -352,18 +353,11 @@ def make_source(name: str) -> Source:
     return FallbackSource(KisSource(client, us_shares=yf_src), yf_src)
 
 
-TRADING_DEFAULTS = {"broker": "sim", "submit": False, "allow_real": False}
-
-
-def trading_settings(conn: sqlite3.Connection) -> dict:
-    return TRADING_DEFAULTS | db.get_setting(conn, "trading", {})
-
-
 def make_broker(conn: sqlite3.Connection) -> tuple[Broker | None, bool]:
     """(broker, dry_run). sim -> (None, False): fills simulated against SQLite positions.
     kis -> orders are only recorded (DRY_RUN) unless `submit`; a real-money account additionally
     needs `allow_real`, so switching .env to a real key never trades by itself."""
-    t = trading_settings(conn)
+    t = control.trading_settings(conn)
     if t["broker"] == "sim":
         return None, False
     from kis_api import KisClient, KisSource
@@ -379,7 +373,7 @@ def make_broker(conn: sqlite3.Connection) -> tuple[Broker | None, bool]:
 
 
 def status(conn: sqlite3.Connection) -> str:
-    t = trading_settings(conn)
+    t = control.trading_settings(conn)
     lines = [f"broker {t['broker']} submit={t['submit']} allow_real={t['allow_real']}"]
     for code in MARKETS:
         lines.append(f"[{code}]")
@@ -458,9 +452,9 @@ def main() -> None:
         print(run_report(conn, now, force=a.force or a.print_only, send=not a.print_only))
         return
     if a.cmd == "config":
-        t = trading_settings(conn) | {k: v for k, v in (("broker", a.broker), ("submit", a.submit),
-                                                       ("allow_real", a.allow_real)) if v is not None}
-        db.set_setting(conn, "trading", t)
+        changes = {k: v for k, v in (("broker", a.broker), ("submit", a.submit),
+                                     ("allow_real", a.allow_real)) if v is not None}
+        t = control.update(conn, {"trading": changes}, "cli")["trading"]
         print(f"trading settings: {t}")
         return
 
