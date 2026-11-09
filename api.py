@@ -217,11 +217,11 @@ def create_app(db_path: Path | str, token: str | None,
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.get("/settings/log", response_model=list[LogEntry])
-    def settings_log(limit: int = Query(default=50, ge=1), conn: sqlite3.Connection = Depends(connection)):
+    def settings_log(limit: int = Query(default=50, ge=1, le=500), conn: sqlite3.Connection = Depends(connection)):
         return db.setting_changes(conn, limit)
 
     @router.get("/orders", response_model=list[Order])
-    def orders(limit: int = Query(default=40, ge=1), conn: sqlite3.Connection = Depends(connection)):
+    def orders(limit: int = Query(default=40, ge=1, le=500), conn: sqlite3.Connection = Depends(connection)):
         return [dict(row) for row in conn.execute("SELECT * FROM orders ORDER BY id DESC LIMIT ?", (limit,))]
 
     app.include_router(router)

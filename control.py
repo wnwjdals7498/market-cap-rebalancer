@@ -35,6 +35,10 @@ def trading_settings(conn: sqlite3.Connection) -> dict:
     return TRADING_DEFAULTS | db.get_setting(conn, "trading", {})
 
 
+def sends_orders(t: dict) -> bool:
+    return t["broker"] == "kis" and bool(t["submit"])
+
+
 def paused(conn: sqlite3.Connection) -> dict[str, bool]:
     return PAUSED_DEFAULTS | db.get_setting(conn, "paused", {})
 
@@ -89,8 +93,11 @@ def update(conn: sqlite3.Connection, changes: dict, source: str, confirm: str | 
     with conn:
         conn.execute("BEGIN IMMEDIATE")
         before = snapshot(conn)
-        if (source == "web" and normalized.get("trading", {}).get("submit") is True
-                and not before["trading"]["submit"] and confirm != "SUBMIT"):
+        old_trading = before["trading"]
+        new_trading = old_trading | normalized.get("trading", {})
+        submit_enabled = not old_trading["submit"] and new_trading["submit"]
+        sending_started = not sends_orders(old_trading) and sends_orders(new_trading)
+        if source == "web" and (submit_enabled or sending_started) and confirm != "SUBMIT":
             raise ControlError("주문 전송을 켜려면 SUBMIT 확인이 필요합니다")
         for group, values in normalized.items():
             saved = db.get_setting(conn, group, {})

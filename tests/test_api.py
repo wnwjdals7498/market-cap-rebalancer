@@ -64,6 +64,12 @@ def test_patch_when_db_locked_returns_503(client, db_path):
         lock.rollback(); lock.close()
 
 
+@pytest.mark.parametrize("path", ["/api/v1/settings/log", "/api/v1/orders"])
+def test_list_limit_is_bounded(client, path):
+    assert client.get(path, headers=H, params={"limit": 500}).status_code == 200
+    assert client.get(path, headers=H, params={"limit": 501}).status_code == 422
+
+
 def test_status_lists_markets_and_runs(client):
     s = client.get("/api/v1/status", headers=H).json()
     assert set(s["markets"]) == {"KR", "US"} and "paused" in s and isinstance(s["runs"], list)
