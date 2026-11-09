@@ -12,3 +12,5 @@ logs/
 .env.*
 !.env.example
 site/
+frontend/node_modules/
+frontend/dist/

@@ -1,0 +1,62 @@
+:root {
+  --bg: #f6f7f9;
+  --card: #ffffff;
+  --fg: #1c1f24;
+  --muted: #5d6673;
+  --line: #d9dde3;
+  --accent: #2557d6;
+  --accent-fg: #ffffff;
+  --error: #b3261e;
+  --ok: #1b6e3c;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171b;
+    --card: #1e2127;
+    --fg: #e6e8eb;
+    --muted: #9aa3af;
+    --line: #333842;
+    --accent: #6c93f5;
+    --accent-fg: #0d1117;
+    --error: #ff8a80;
+    --ok: #6fd29a;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.5 system-ui, -apple-system, 'Segoe UI', 'Noto Sans KR', sans-serif;
+}
+main, .gate { max-width: 860px; margin: 0 auto; padding: 16px; }
+.gate { margin-top: 10vh; max-width: 420px; }
+header { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; }
+nav { display: flex; gap: 16px; }
+a { color: var(--accent); }
+h1 { font-size: 1.4rem; margin: 0 0 8px; }
+h2 { font-size: 1.1rem; margin: 0 0 8px; }
+h3 { font-size: 0.95rem; margin: 16px 0 4px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin: 16px 0; }
+.hint { color: var(--muted); font-size: 0.85rem; font-weight: normal; }
+.error { color: var(--error); }
+.ok { color: var(--ok); }
+.row { display: flex; align-items: center; gap: 8px; margin: 6px 0; flex-wrap: wrap; }
+.fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.field { display: flex; flex-direction: column; gap: 2px; }
+input[type='number'], input[type='text'], input[type='password'], select {
+  font: inherit; padding: 6px 8px; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; width: 100%;
+}
+input[aria-invalid='true'] { border-color: var(--error); }
+button {
+  font: inherit; padding: 6px 14px; border: 0; border-radius: 6px; cursor: pointer;
+  background: var(--accent); color: var(--accent-fg);
+}
+button.secondary { background: transparent; color: var(--fg); border: 1px solid var(--line); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.dialog { margin-top: 16px; padding: 12px; border: 2px solid var(--error); border-radius: 8px; }
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; display: block; overflow-x: auto; }
+th, td { text-align: left; padding: 4px 10px 4px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+dl { margin: 8px 0 0; } dt { min-width: 160px; color: var(--muted); } dd { margin: 0; }
