@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import logging
 import math
 import sqlite3
@@ -20,6 +21,7 @@ import time
 from dataclasses import asdict, fields
 from datetime import time as dtime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -391,6 +393,25 @@ def status(conn: sqlite3.Connection) -> str:
     return "\n".join(lines)
 
 
+def serve_web(app: Any, hosts: list[str], port: int) -> None:
+    """Serve the web app on every host at the same port: one uvicorn server, one socket per host."""
+    import uvicorn
+
+    configs = [uvicorn.Config(app, host=h, port=port, log_level="warning") for h in dict.fromkeys(hosts)]
+    sockets = []
+    for c in configs:
+        try:
+            sockets.append(c.bind_socket())
+        except SystemExit as e:  # uvicorn logs the bind OSError and exits
+            err = e.__context__
+            if isinstance(err, OSError):
+                hint = (f"already running? open http://{c.host}:{port}/" if err.errno == errno.EADDRINUSE
+                        else "is this address up on this machine?")
+                raise SystemExit(f"cannot listen on {c.host}:{port} ({err.strerror}); {hint}") from None
+            raise
+    uvicorn.Server(configs[0]).run(sockets=sockets)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--db", default=str(db.DEFAULT_DB))
@@ -413,7 +434,8 @@ def main() -> None:
     sub.add_parser("status")
     p = sub.add_parser("web", help="investment report web page (site/index.html; --serve for a local server)")
     p.add_argument("--serve", action="store_true")
-    p.add_argument("--host", default="127.0.0.1", help="127.0.0.1 = this PC only (no login on the page)")
+    p.add_argument("--host", action="append",
+                   help="address to listen on, repeatable (default 127.0.0.1 = this PC only; no login on the page)")
     p.add_argument("--port", type=int, default=8765)
     p = sub.add_parser("report", help="daily report (sent to Telegram; --print to only show it)")
     p.add_argument("--print", dest="print_only", action="store_true")
@@ -456,16 +478,8 @@ def main() -> None:
         print(f"wrote {webreport.write_site(conn, SITE_DIR)}")
         if a.serve:
             import api
-            import uvicorn
 
-            try:
-                uvicorn.run(api.create_app(a.db, api.load_token()), host=a.host, port=a.port, log_level="warning")
-            except SystemExit as e:
-                if isinstance(e.__context__, OSError):
-                    error = e.__context__
-                    raise SystemExit(f"cannot listen on {a.host}:{a.port} ({error.strerror}); "
-                                     f"already running? open http://{a.host}:{a.port}/") from None
-                raise
+            serve_web(api.create_app(a.db, api.load_token()), a.host or ["127.0.0.1"], a.port)
         return
     if a.cmd == "report":
         print(run_report(conn, now, force=a.force or a.print_only, send=not a.print_only))

@@ -95,7 +95,7 @@ sudo deploy/install.sh                     # 설치 + 시작. 웹 서버 빼려�
 
 ## 5. 웹 리포트 접속
 
-서버는 `127.0.0.1:8765` 에서만 듣는다. 페이지에 로그인 기능이 없으므로 **`0.0.0.0` 이나 공인 IP 로 열지 않는다.**
+서버는 기본으로 `127.0.0.1:8765` 에서만 듣는다. 페이지에 로그인 기능이 없으므로 **`0.0.0.0` 이나 공인 IP 로 열지 않는다.**
 
 `.env` 에 `MCR_API_TOKEN` 을 설정한다. 토큰은 `.venv/bin/python -c "import secrets; print(secrets.token_urlsafe(32))"` 로 생성하고 설정 화면에 입력한다. 토큰이 없으면 설정 API 는 동작하지 않는다.
 
@@ -109,14 +109,23 @@ sudo deploy/install.sh                     # 설치 + 시작. 웹 서버 빼려�
 ssh -N -L 8765:127.0.0.1:8765 user@SERVER
 ```
 
-**Tailscale 같은 사설망.** 서버의 사설망 IP 로만 듣게 바꾼다:
+**WireGuard·Tailscale 같은 사설망.** `--host` 를 여러 번 주면 그 주소 모두에서 듣는다. `127.0.0.1` 을 같이 두면 SSH 터널도 계속 쓸 수 있다. 저장소의 유닛은 그대로 두고 서버별 덮어쓰기(drop-in)로 바꾼다:
 
 ```bash
 sudo systemctl edit mcr-web.service
+#   [Unit]
+#   After=wg-quick@wg0.service    # 사설망 인터페이스가 뜬 뒤 시작 (Tailscale 은 tailscaled.service)
 #   [Service]
 #   ExecStart=
-#   ExecStart=/home/USER/market-cap-rebalancer/.venv/bin/python jobs.py web --serve --host 100.x.y.z --port 8765
+#   ExecStart=/home/USER/market-cap-rebalancer/.venv/bin/python jobs.py web --serve --host 127.0.0.1 --host 10.8.0.1 --port 8765
 sudo systemctl restart mcr-web.service
+```
+
+사설망 주소가 아직 없으면 `cannot listen on ... is this address up on this machine?` 로 종료하고, 유닛의 `Restart=always` 가 60초 뒤 다시 띄운다. firewalld 가 켜져 있으면 사설망 인터페이스가 속한 zone 에 포트를 연다:
+
+```bash
+sudo firewall-cmd --get-zone-of-interface=wg0
+sudo firewall-cmd --permanent --zone=ZONE --add-port=8765/tcp && sudo firewall-cmd --reload
 ```
 
 인터넷에 꼭 공개해야 한다면 리버스 프록시(Caddy, nginx)에 HTTPS 와 로그인(basic auth 등)을 붙이고, 서버 자체는 계속 127.0.0.1 에 둔다.

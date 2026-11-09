@@ -182,10 +182,11 @@ powershell -ExecutionPolicy Bypass -File scripts/register_web.ps1 -Unregister
 ```
 
 - 다른 DB 를 보려면 `jobs.py --db <경로> web --serve --port 8766` (포트를 바꾸면 동시에 여러 개).
+- 여러 주소에서 함께 들으려면 `--host` 를 반복한다: `--host 127.0.0.1 --host 10.8.0.1` (사설망 주소, 기본은 `127.0.0.1` 하나).
 - 이미 켜진 포트로 또 실행하면 `cannot listen on 127.0.0.1:8765 ... already running?` 메시지로 종료. 그냥 브라우저로 열면 됨.
 - 리포트는 DB 를 읽기 전용으로 열어 매매 작업의 쓰기를 막지 않는다. 설정 API 는 DB 에 설정을 기록한다.
 
-외부 서버에서는 `mcr-web.service` 가 같은 서버를 띄우고, SSH 터널로 접속한다: [deploy/DEPLOY.md](deploy/DEPLOY.md) 5번.
+외부 서버에서는 `mcr-web.service` 가 같은 서버를 띄우고, SSH 터널이나 사설망(VPN)으로 접속한다: [deploy/DEPLOY.md](deploy/DEPLOY.md) 5번.
 
 ### 화면 구성
 

@@ -298,3 +298,9 @@ def test_pause_cli_and_status(tmp_path, monkeypatch, capsys):
     conn = db.connect(path)
     assert all(row["source"] == "cli" for row in db.setting_changes(conn))
     conn.close()
+
+
+def test_web_serve_names_the_address_it_cannot_listen_on():
+    # 127.0.0.1 binds (listed twice = one socket); 192.0.2.1 (TEST-NET-1) is never an address of this machine
+    with pytest.raises(SystemExit, match=r"cannot listen on 192\.0\.2\.1:0 .*is this address up"):
+        jobs.serve_web(object(), ["127.0.0.1", "127.0.0.1", "192.0.2.1"], 0)
