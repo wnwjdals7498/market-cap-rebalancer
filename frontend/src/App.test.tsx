@@ -49,6 +49,40 @@ describe('settings UI', () => {
     })
   })
 
+  it('requires typing SUBMIT before switching to kis while submission is on', async () => {
+    sessionStorage.setItem('mcr_token', 't')
+    const live = { ...settings, trading: { ...settings.trading, submit: true } }
+    const fetchFn = stubFetch({
+      ...defaultRoutes(),
+      'GET /api/v1/settings': () => json(live),
+      'PATCH /api/v1/settings': () => json({ ...live, trading: { ...live.trading, broker: 'kis' } }),
+    })
+    render(<App />)
+    const select = await screen.findByLabelText('broker')
+    await userEvent.selectOptions(select, 'kis')
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('broker(kis)')
+    const box = within(dialog).getByRole('textbox')
+    await userEvent.type(box, 'submit')
+    await userEvent.click(within(dialog).getByRole('button', { name: '켜기' }))
+    expect(patchCalls(fetchFn)).toHaveLength(0)
+
+    await userEvent.click(within(dialog).getByRole('button', { name: '취소' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(select).toHaveValue('sim') // cancelled: back to the original value
+    expect(patchCalls(fetchFn)).toHaveLength(0)
+
+    await userEvent.selectOptions(select, 'kis')
+    const again = await screen.findByRole('dialog')
+    await userEvent.type(within(again).getByRole('textbox'), 'SUBMIT')
+    await userEvent.click(within(again).getByRole('button', { name: '켜기' }))
+    await waitFor(() => expect(patchCalls(fetchFn)).toHaveLength(1))
+    expect(JSON.parse(String(patchCalls(fetchFn)[0][1]?.body))).toEqual({
+      trading: { broker: 'kis' },
+      confirm: 'SUBMIT',
+    })
+  })
+
   it('shows allow_real as read-only', async () => {
     sessionStorage.setItem('mcr_token', 't')
     stubFetch(defaultRoutes())

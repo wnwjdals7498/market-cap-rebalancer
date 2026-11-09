@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { Client } from '../api/client'
-import type { MarketCode, Settings, Snapshot } from '../api/types'
+import type { MarketCode, Settings, SettingsPatch, Snapshot } from '../api/types'
 import { SaveNotice, useSave } from '../useSave'
 
 interface Props {
@@ -14,12 +14,13 @@ const CONFIRM_WORD = 'SUBMIT'
 
 export function TradingPanel({ client, settings, onChange, onUnauthorized }: Props) {
   const { save, busy, error, saved } = useSave(client, onUnauthorized)
-  const [confirming, setConfirming] = useState(false)
+  // 확인이 필요한 변경(주문 전송 켜기, 전송 중 broker 를 kis 로 바꾸기)은 SUBMIT 입력 뒤에 보낸다.
+  const [pending, setPending] = useState<SettingsPatch | null>(null)
   const [typed, setTyped] = useState('')
   const [typedError, setTypedError] = useState<string | null>(null)
   const { trading, paused } = settings
 
-  async function apply(body: Parameters<typeof save>[0]) {
+  async function apply(body: SettingsPatch) {
     const next = await save(body)
     if (next) onChange(next)
     return next !== null
@@ -27,11 +28,19 @@ export function TradingPanel({ client, settings, onChange, onUnauthorized }: Pro
 
   function toggleSubmit() {
     if (trading.submit) void apply({ trading: { submit: false } }) // 끌 때는 확인이 필요 없다
-    else {
-      setTyped('')
-      setTypedError(null)
-      setConfirming(true)
-    }
+    else askConfirm({ trading: { submit: true } })
+  }
+
+  function changeBroker(broker: 'sim' | 'kis') {
+    // 이미 전송 중일 때 kis 로 바꾸면 실제 주문이 나가므로 켤 때와 같은 확인을 거친다. select 는 제어 값이라 취소하면 원래대로 돌아간다.
+    if (broker === 'kis' && trading.submit) askConfirm({ trading: { broker } })
+    else void apply({ trading: { broker } })
+  }
+
+  function askConfirm(body: SettingsPatch) {
+    setTyped('')
+    setTypedError(null)
+    setPending(body)
   }
 
   async function confirmSubmit() {
@@ -39,7 +48,7 @@ export function TradingPanel({ client, settings, onChange, onUnauthorized }: Pro
       setTypedError(`${CONFIRM_WORD} 를 정확히 입력해야 합니다.`)
       return
     }
-    if (await apply({ trading: { submit: true }, confirm: CONFIRM_WORD })) setConfirming(false)
+    if (pending && (await apply({ ...pending, confirm: CONFIRM_WORD }))) setPending(null)
   }
 
   return (
@@ -51,7 +60,7 @@ export function TradingPanel({ client, settings, onChange, onUnauthorized }: Pro
           id="broker"
           value={trading.broker}
           disabled={busy}
-          onChange={(e) => void apply({ trading: { broker: e.target.value as 'sim' | 'kis' } })}
+          onChange={(e) => changeBroker(e.target.value as 'sim' | 'kis')}
         >
           <option value="sim">sim</option>
           <option value="kis">kis</option>
@@ -80,9 +89,9 @@ export function TradingPanel({ client, settings, onChange, onUnauthorized }: Pro
       ))}
       <SaveNotice error={error} saved={saved} />
 
-      {confirming && (
+      {pending && (
         <div role="dialog" aria-modal="true" aria-label="주문 전송 켜기" className="dialog">
-          <p>주문 전송을 켜면 다음 tick 부터 broker 로 주문이 나갑니다. 계속하려면 <b>{CONFIRM_WORD}</b> 를 입력하세요.</p>
+          <p>주문 전송을 켜면 다음 tick 부터 broker({pending.trading?.broker ?? trading.broker}) 로 주문이 나갑니다. 계속하려면 <b>{CONFIRM_WORD}</b> 를 입력하세요.</p>
           <input
             type="text"
             aria-label="확인 문구"
@@ -93,7 +102,7 @@ export function TradingPanel({ client, settings, onChange, onUnauthorized }: Pro
           {typedError && <p role="alert" className="error">{typedError}</p>}
           <div className="row">
             <button type="button" onClick={() => void confirmSubmit()} disabled={busy}>켜기</button>
-            <button type="button" className="secondary" onClick={() => setConfirming(false)}>취소</button>
+            <button type="button" className="secondary" onClick={() => setPending(null)}>취소</button>
           </div>
         </div>
       )}
