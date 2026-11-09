@@ -83,6 +83,22 @@ def test_openapi_and_report(client):
     assert client.get("/version").status_code == 200
 
 
+def test_openapi_has_typed_responses(client):
+    schema = client.get("/api/openapi.json").json()
+    response = schema["paths"]["/api/v1/settings"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+    assert response["$ref"] == "#/components/schemas/Settings"
+    assert schema["components"]["schemas"]["Settings"]["properties"]["trading"]["$ref"] == "#/components/schemas/Trading"
+
+
+@pytest.mark.parametrize("changes", [
+    {"trading": {"submit": 1}}, {"trading": {"submit": "true"}},
+    {"paused": {"KR": 1}}, {"trading": {"broker": "ib"}},
+    {"trading": {"unknown": True}}, {"paused": {"JP": True}},
+])
+def test_patch_rejects_invalid_typed_fields(client, changes):
+    assert client.patch("/api/v1/settings", headers=H, json=changes).status_code == 400
+
+
 def test_served_page_tracks_db_changes(client, db_path, tmp_path):
     conn = db.connect(db_path)
     assert 'data-version' not in webreport.build_html(conn)
