@@ -97,6 +97,12 @@ sudo deploy/install.sh                     # 설치 + 시작. 웹 서버 빼려�
 
 서버는 `127.0.0.1:8765` 에서만 듣는다. 페이지에 로그인 기능이 없으므로 **`0.0.0.0` 이나 공인 IP 로 열지 않는다.**
 
+`.env` 에 `MCR_API_TOKEN` 을 설정한다. 토큰은 `.venv/bin/python -c "import secrets; print(secrets.token_urlsafe(32))"` 로 생성하고 설정 화면에 입력한다. 토큰이 없으면 설정 API 는 동작하지 않는다.
+
+설정 화면은 http://127.0.0.1:8765/app/ 이다. 프런트엔드 코드가 포함된 상태에서 Node 20.19 이상 21 미만 또는 22.12 이상으로 `cd frontend && npm ci && npm run build` 를 실행해 빌드한다. 실행 중에는 Node 가 필요 없다. 설정 변경은 다음 tick(최대 5분 뒤)부터 적용된다.
+
+웹 서버의 명령 형식이 같으므로 systemd 유닛과 Windows `scripts/*.ps1` 은 바꾸지 않는다.
+
 **SSH 터널 (기본).** PC 에서 실행해 두고 브라우저로 http://127.0.0.1:8765/ 를 연다. 자동 갱신도 터널을 그대로 통과한다.
 
 ```bash
@@ -114,6 +120,8 @@ sudo systemctl restart mcr-web.service
 ```
 
 인터넷에 꼭 공개해야 한다면 리버스 프록시(Caddy, nginx)에 HTTPS 와 로그인(basic auth 등)을 붙이고, 서버 자체는 계속 127.0.0.1 에 둔다.
+
+설정 API 는 토큰이 필요하지만 리포트(`/`)와 설정 화면 파일(`/app/`)은 인증이 없으므로 사설망·프록시 인증 뒤에만 둔다.
 
 ## 6. 운영
 

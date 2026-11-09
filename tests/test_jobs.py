@@ -244,30 +244,6 @@ def test_web_report_page(env, tmp_path):
     assert "<title>투자 리포트</title>" in webreport.write_site(conn, tmp_path / "site").read_text(encoding="utf-8")
 
 
-def test_served_page_tracks_db_changes(env, tmp_path):
-    import threading
-    import urllib.request
-    import webreport
-    conn, src, cfg = env
-    db_path = conn.execute("PRAGMA database_list").fetchone()["file"]
-    assert 'data-version' not in webreport.build_html(conn)  # written file: static, no polling
-    assert "DB 없음" in webreport.render(tmp_path / "missing.db")
-    server = webreport.make_server(db_path, port=0)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    base = f"http://127.0.0.1:{server.server_address[1]}"
-    get = lambda path: urllib.request.urlopen(base + path).read().decode("utf-8")
-    try:
-        v0 = get("/version")
-        assert f'data-version="{v0}"' in get("/") and 'id="live"' in get("/")
-        run_day(conn, src, cfg, "2026-10-26", {"AAPL": 5000})
-        assert get("/version") != v0 and "US 2026-10-26 | SOLO" in get("/")
-        with pytest.raises(urllib.error.HTTPError):
-            get("/etc/passwd")
-    finally:
-        server.shutdown()
-        server.server_close()
-
-
 def test_line_chart_escapes_and_handles_gaps():
     import webreport
     svg = webreport.line_chart(["2026-01-01", "2026-01-02"], [{"name": "<b>", "slot": 0, "values": [None, 5.0]}],

@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 import api
 import db
 import markets
+import webreport
 
 TOKEN = "t" * 32
 H = {"Authorization": f"Bearer {TOKEN}"}
@@ -20,8 +21,8 @@ def db_path(tmp_path):
 
 
 @pytest.fixture
-def client(db_path):
-    return TestClient(api.create_app(db_path, TOKEN, db_timeout=0.2))
+def client(db_path, tmp_path):
+    return TestClient(api.create_app(db_path, TOKEN, web_dir=tmp_path / "no-dist", db_timeout=0.2))
 
 
 def test_api_requires_token(client):
@@ -80,6 +81,36 @@ def test_openapi_and_report(client):
     assert "/api/v1/settings" in client.get("/api/openapi.json").json()["paths"]
     assert client.get("/").text.startswith("<!doctype html>")
     assert client.get("/version").status_code == 200
+
+
+def test_openapi_has_typed_responses(client):
+    schema = client.get("/api/openapi.json").json()
+    response = schema["paths"]["/api/v1/settings"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+    assert response["$ref"] == "#/components/schemas/Settings"
+    assert schema["components"]["schemas"]["Settings"]["properties"]["trading"]["$ref"] == "#/components/schemas/Trading"
+
+
+@pytest.mark.parametrize("changes", [
+    {"trading": {"submit": 1}}, {"trading": {"submit": "true"}},
+    {"paused": {"KR": 1}}, {"trading": {"broker": "ib"}},
+    {"trading": {"unknown": True}}, {"paused": {"JP": True}},
+])
+def test_patch_rejects_invalid_typed_fields(client, changes):
+    assert client.patch("/api/v1/settings", headers=H, json=changes).status_code == 400
+
+
+def test_served_page_tracks_db_changes(client, db_path, tmp_path):
+    conn = db.connect(db_path)
+    assert 'data-version' not in webreport.build_html(conn)
+    assert "DB 없음" in webreport.render(tmp_path / "missing.db")
+    v0 = client.get("/version").text
+    assert f'data-version="{v0}"' in client.get("/").text and 'id="live"' in client.get("/").text
+    db.save_equity(conn, "2026-10-27", 1000, 100, 1400)
+    v1 = client.get("/version").text
+    assert v1 != v0 and f'data-version="{v1}"' in client.get("/").text
+    assert "2026-10-27" in client.get("/").text
+    assert client.get("/etc/passwd").status_code == 404
+    conn.close()
 
 
 def test_token_from_file_and_environment(tmp_path, monkeypatch):

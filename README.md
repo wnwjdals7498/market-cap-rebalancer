@@ -152,6 +152,10 @@ powershell -ExecutionPolicy Bypass -File scripts\register_task.ps1 -Unregister
 
 열어 둔 페이지는 5초마다 SQLite 변경을 확인해서, 작업(signal/execute/report)이 DB 에 기록하면 새로고침 없이 바로 갱신된다. 스크롤 위치와 펼친 표는 유지. 제목 옆 배지가 상태를 보여 줌: `실시간 · 12:00:05 확인` / `서버 연결 끊김 · 재시도 중`(서버가 다시 뜨면 스스로 복구).
 
+설정 화면은 http://127.0.0.1:8765/app/ 에서 연다. `.env` 의 `MCR_API_TOKEN` 에 토큰을 설정하고 화면에 입력한다. 토큰은 `python -c "import secrets; print(secrets.token_urlsafe(32))"` 로 생성한다. 설정 변경은 다음 tick(최대 5분 뒤)부터 적용된다.
+
+설정 화면을 사용하려면 프런트엔드 코드가 포함된 상태에서 Node 20.19 이상 21 미만 또는 22.12 이상이 필요하다. 배포할 때 `cd frontend && npm ci && npm run build` 로 화면을 빌드한다. 실행 중에는 Node 가 필요 없다.
+
 ### 여는 방법
 
 **1. 항상 켜두기 (권장)** — 로그온할 때 자동 시작, 죽으면 1분 뒤 재시작, 창 없음:
@@ -181,7 +185,7 @@ powershell -ExecutionPolicy Bypass -File scripts/register_web.ps1 -Unregister
 
 - 다른 DB 를 보려면 `jobs.py --db <경로> web --serve --port 8766` (포트를 바꾸면 동시에 여러 개).
 - 이미 켜진 포트로 또 실행하면 `cannot listen on 127.0.0.1:8765 ... already running?` 메시지로 종료. 그냥 브라우저로 열면 됨.
-- 서버는 DB 를 읽기 전용으로 열어 매매 작업의 쓰기를 막지 않는다. DB 가 없거나 읽기 실패면 안내 문구를 보여 주고 계속 재시도.
+- 리포트는 DB 를 읽기 전용으로 열어 매매 작업의 쓰기를 막지 않는다. 설정 API 는 DB 에 설정을 기록한다.
 
 외부 서버에서는 `mcr-web.service` 가 같은 서버를 띄우고, SSH 터널로 접속한다: [deploy/DEPLOY.md](deploy/DEPLOY.md) 5번.
 
@@ -193,7 +197,7 @@ powershell -ExecutionPolicy Bypass -File scripts/register_web.ps1 -Unregister
 
 ### 보안
 
-기본은 이 PC 에서만 접속 (`127.0.0.1`). 페이지에 로그인 기능이 없으므로 `--host 0.0.0.0` 으로 열면 같은 네트워크의 누구나 계좌 정보를 볼 수 있음. 휴대폰에서 보려면 Tailscale 같은 사설망을 먼저.
+기본은 이 PC 에서만 접속 (`127.0.0.1`). 리포트에는 인증이 없으므로 `--host 0.0.0.0` 이나 공인 IP 로 열지 않는다. 설정 API 는 토큰이 없으면 동작하지 않는다.
 
 ## 웹 설정 (브라우저에서 설정 바꾸기)
 

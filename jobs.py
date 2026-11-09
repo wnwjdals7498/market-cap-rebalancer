@@ -455,7 +455,17 @@ def main() -> None:
     if a.cmd == "web":
         print(f"wrote {webreport.write_site(conn, SITE_DIR)}")
         if a.serve:
-            webreport.serve(a.db, a.host, a.port)
+            import api
+            import uvicorn
+
+            try:
+                uvicorn.run(api.create_app(a.db, api.load_token()), host=a.host, port=a.port, log_level="warning")
+            except SystemExit as e:
+                if isinstance(e.__context__, OSError):
+                    error = e.__context__
+                    raise SystemExit(f"cannot listen on {a.host}:{a.port} ({error.strerror}); "
+                                     f"already running? open http://{a.host}:{a.port}/") from None
+                raise
         return
     if a.cmd == "report":
         print(run_report(conn, now, force=a.force or a.print_only, send=not a.print_only))

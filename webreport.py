@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import html
 import json
-import os
 import sqlite3
 from datetime import datetime, timezone
 
@@ -335,43 +334,3 @@ def _message_page(text: str, version: str) -> str:
             f'<h1>투자 리포트</h1><p class="sub"><span id="live" class="pill good"></span></p>'
             f'<div class="card empty">{esc(text)}</div></main><script>{JS % {"poll_ms": POLL_MS}}</script>'
             f'</body></html>')
-
-
-def make_server(db_path, host: str = "127.0.0.1", port: int = 8765):
-    """GET / = the page rebuilt from SQLite on every request, GET /version = db_version (the page polls it)."""
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            path = self.path.split("?")[0]
-            if path in ("/", "/index.html"):
-                body, ctype = render(db_path).encode("utf-8"), "text/html; charset=utf-8"
-            elif path == "/version":
-                body, ctype = db_version(db_path).encode(), "text/plain"
-            else:
-                self.send_error(404)
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, *args):  # keep the console quiet
-            pass
-
-    class Server(ThreadingHTTPServer):
-        allow_reuse_address = os.name != "nt"  # on Windows SO_REUSEADDR would let a second server share the port
-        daemon_threads = True
-
-    return Server((host, port), Handler)
-
-
-def serve(db_path, host: str = "127.0.0.1", port: int = 8765) -> None:
-    try:
-        server = make_server(db_path, host, port)
-    except OSError as e:  # most often: already running (scheduled task or another terminal)
-        raise SystemExit(f"cannot listen on {host}:{port} ({e.strerror}); already running? open http://{host}:{port}/")
-    print(f"serving http://{host}:{port}/  (Ctrl+C to stop; an open page refreshes itself when the DB changes)")
-    server.serve_forever()
