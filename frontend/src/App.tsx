@@ -26,9 +26,9 @@ function Dashboard({ client, onUnauthorized }: { client: Client; onUnauthorized:
     }
   }, [client, onUnauthorized])
 
-  // PATCH 응답에 limits 가 없으면 기존 값을 유지한다.
+  // PATCH 응답(Snapshot)에는 limits 가 없으므로 기존 값을 유지한다.
   const apply = useCallback((next: Snapshot) => {
-    setSettings((prev) => (prev ? { ...prev, ...next, limits: next.limits ?? prev.limits } : prev))
+    setSettings((prev) => (prev ? { ...prev, ...next } : prev))
   }, [])
 
   return (

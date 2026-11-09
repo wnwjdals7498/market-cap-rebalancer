@@ -82,6 +82,127 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** Limit */
+        Limit: {
+            /** Max */
+            max: number;
+            /** Min */
+            min: number;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "int" | "float";
+        };
+        /** LogEntry */
+        LogEntry: {
+            /** At */
+            at: string;
+            /** Id */
+            id: number;
+            /** Key */
+            key: string;
+            /** New */
+            new: string | null;
+            /** Old */
+            old: string | null;
+            /** Source */
+            source: string;
+        };
+        /** MarketTimes */
+        MarketTimes: {
+            /** Close */
+            close: string | null;
+            /** Execute */
+            execute: string | null;
+            /** Session */
+            session: string | null;
+            /** Signal */
+            signal: string | null;
+        };
+        /** Order */
+        Order: {
+            /** Broker Order No */
+            broker_order_no: string | null;
+            /** Cost */
+            cost: number | null;
+            /** Created At */
+            created_at: string;
+            /** Error */
+            error: string | null;
+            /** Fill Price */
+            fill_price: number | null;
+            /** Filled Qty */
+            filled_qty: number;
+            /** Id */
+            id: number;
+            /** Limit Price */
+            limit_price: number;
+            /** Market */
+            market: string;
+            /** Qty */
+            qty: number;
+            /** Ref Price */
+            ref_price: number;
+            /** Session Date */
+            session_date: string;
+            /** Side */
+            side: string;
+            /** Status */
+            status: string;
+            /** Step */
+            step: number;
+            /** Ticker */
+            ticker: string;
+        };
+        /** Paused */
+        Paused: {
+            /** Kr */
+            KR: boolean;
+            /** Us */
+            US: boolean;
+        };
+        /** PausedPatch */
+        PausedPatch: {
+            /** Kr */
+            KR?: boolean | null;
+            /** Us */
+            US?: boolean | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** Run */
+        Run: {
+            /** Detail */
+            detail: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /** Job */
+            job: string;
+            /** Market */
+            market: string;
+            /** Session Date */
+            session_date: string;
+            /** Started At */
+            started_at: string;
+            /** Status */
+            status: string;
+        };
+        /** Settings */
+        Settings: {
+            /** Config */
+            config: {
+                [key: string]: number | string;
+            };
+            /** Editable */
+            editable: string[];
+            /** Limits */
+            limits: {
+                [key: string]: components["schemas"]["Limit"];
+            };
+            paused: components["schemas"]["Paused"];
+            trading: components["schemas"]["Trading"];
+        };
         /** SettingsPatch */
         SettingsPatch: {
             /** Config */
@@ -90,14 +211,55 @@ export interface components {
             } | null;
             /** Confirm */
             confirm?: string | null;
-            /** Paused */
-            paused?: {
-                [key: string]: unknown;
-            } | null;
-            /** Trading */
-            trading?: {
-                [key: string]: unknown;
-            } | null;
+            paused?: components["schemas"]["PausedPatch"] | null;
+            trading?: components["schemas"]["TradingPatch"] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** Snapshot */
+        Snapshot: {
+            /** Config */
+            config: {
+                [key: string]: number | string;
+            };
+            /** Editable */
+            editable: string[];
+            paused: components["schemas"]["Paused"];
+            trading: components["schemas"]["Trading"];
+        };
+        /** Status */
+        Status: {
+            /** Db Version */
+            db_version: string;
+            /** Markets */
+            markets: {
+                [key: string]: components["schemas"]["MarketTimes"];
+            };
+            paused: components["schemas"]["Paused"];
+            /** Runs */
+            runs: components["schemas"]["Run"][];
+            trading: components["schemas"]["Trading"];
+        };
+        /** Trading */
+        Trading: {
+            /** Allow Real */
+            allow_real: boolean;
+            /**
+             * Broker
+             * @enum {string}
+             */
+            broker: "sim" | "kis";
+            /** Submit */
+            submit: boolean;
+        };
+        /** TradingPatch */
+        TradingPatch: {
+            /** Allow Real */
+            allow_real?: boolean | null;
+            /** Broker */
+            broker?: ("sim" | "kis") | null;
+            /** Submit */
+            submit?: boolean | null;
         } & {
             [key: string]: unknown;
         };
@@ -140,7 +302,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Order"][];
                 };
             };
             /** @description Validation Error */
@@ -169,7 +331,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Settings"];
                 };
             };
         };
@@ -193,7 +355,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Snapshot"];
                 };
             };
             /** @description Validation Error */
@@ -224,7 +386,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["LogEntry"][];
                 };
             };
             /** @description Validation Error */
@@ -253,7 +415,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Status"];
                 };
             };
         };

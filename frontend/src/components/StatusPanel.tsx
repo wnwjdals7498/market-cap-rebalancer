@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { UnauthorizedError, type Client } from '../api/client'
-import type { Status } from '../api/types'
+import type { MarketCode, Status } from '../api/types'
 import { kst } from '../format'
 
 const REFRESH_MS = 30_000
@@ -43,15 +43,14 @@ export function StatusPanel({ client, onUnauthorized }: { client: Client; onUnau
               <tr><th>시장</th><th>세션</th><th>signal</th><th>execute</th><th>상태</th></tr>
             </thead>
             <tbody>
-              {(Object.keys(status.markets) as Array<keyof Status['markets']>).map((code) => {
-                const m = status.markets[code]
+              {Object.entries(status.markets).map(([code, m]) => {
                 return (
                   <tr key={code}>
                     <td>{code}</td>
                     <td>{m.session ?? '오늘 없음'}</td>
                     <td>{kst(m.signal)}</td>
                     <td>{kst(m.execute)}</td>
-                    <td>{status.paused[code] ? '일시정지' : '동작'}</td>
+                    <td>{status.paused[code as MarketCode] ? '일시정지' : '동작'}</td>
                   </tr>
                 )
               })}

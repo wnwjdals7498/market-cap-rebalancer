@@ -14,6 +14,411 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "Limit": {
+        "properties": {
+          "max": {
+            "title": "Max",
+            "type": "number"
+          },
+          "min": {
+            "title": "Min",
+            "type": "number"
+          },
+          "type": {
+            "enum": [
+              "int",
+              "float"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "min",
+          "max"
+        ],
+        "title": "Limit",
+        "type": "object"
+      },
+      "LogEntry": {
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "new": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New"
+          },
+          "old": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Old"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "at",
+          "key",
+          "old",
+          "new",
+          "source"
+        ],
+        "title": "LogEntry",
+        "type": "object"
+      },
+      "MarketTimes": {
+        "properties": {
+          "close": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Close"
+          },
+          "execute": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execute"
+          },
+          "session": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session"
+          },
+          "signal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signal"
+          }
+        },
+        "required": [
+          "session",
+          "signal",
+          "execute",
+          "close"
+        ],
+        "title": "MarketTimes",
+        "type": "object"
+      },
+      "Order": {
+        "properties": {
+          "broker_order_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker Order No"
+          },
+          "cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "fill_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fill Price"
+          },
+          "filled_qty": {
+            "title": "Filled Qty",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "limit_price": {
+            "title": "Limit Price",
+            "type": "number"
+          },
+          "market": {
+            "title": "Market",
+            "type": "string"
+          },
+          "qty": {
+            "title": "Qty",
+            "type": "integer"
+          },
+          "ref_price": {
+            "title": "Ref Price",
+            "type": "number"
+          },
+          "session_date": {
+            "title": "Session Date",
+            "type": "string"
+          },
+          "side": {
+            "title": "Side",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "step": {
+            "title": "Step",
+            "type": "integer"
+          },
+          "ticker": {
+            "title": "Ticker",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "session_date",
+          "market",
+          "ticker",
+          "side",
+          "step",
+          "qty",
+          "ref_price",
+          "limit_price",
+          "filled_qty",
+          "fill_price",
+          "cost",
+          "status",
+          "broker_order_no",
+          "created_at",
+          "error"
+        ],
+        "title": "Order",
+        "type": "object"
+      },
+      "Paused": {
+        "properties": {
+          "KR": {
+            "title": "Kr",
+            "type": "boolean"
+          },
+          "US": {
+            "title": "Us",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "KR",
+          "US"
+        ],
+        "title": "Paused",
+        "type": "object"
+      },
+      "PausedPatch": {
+        "additionalProperties": true,
+        "properties": {
+          "KR": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kr"
+          },
+          "US": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Us"
+          }
+        },
+        "title": "PausedPatch",
+        "type": "object"
+      },
+      "Run": {
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "job": {
+            "title": "Job",
+            "type": "string"
+          },
+          "market": {
+            "title": "Market",
+            "type": "string"
+          },
+          "session_date": {
+            "title": "Session Date",
+            "type": "string"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job",
+          "market",
+          "session_date",
+          "started_at",
+          "finished_at",
+          "status",
+          "detail"
+        ],
+        "title": "Run",
+        "type": "object"
+      },
+      "Settings": {
+        "properties": {
+          "config": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "title": "Config",
+            "type": "object"
+          },
+          "editable": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Editable",
+            "type": "array"
+          },
+          "limits": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Limit"
+            },
+            "title": "Limits",
+            "type": "object"
+          },
+          "paused": {
+            "$ref": "#/components/schemas/Paused"
+          },
+          "trading": {
+            "$ref": "#/components/schemas/Trading"
+          }
+        },
+        "required": [
+          "trading",
+          "paused",
+          "config",
+          "editable",
+          "limits"
+        ],
+        "title": "Settings",
+        "type": "object"
+      },
       "SettingsPatch": {
         "additionalProperties": true,
         "properties": {
@@ -43,29 +448,175 @@
           "paused": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/PausedPatch"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Paused"
+            ]
           },
           "trading": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/TradingPatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "SettingsPatch",
+        "type": "object"
+      },
+      "Snapshot": {
+        "properties": {
+          "config": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "title": "Config",
+            "type": "object"
+          },
+          "editable": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Editable",
+            "type": "array"
+          },
+          "paused": {
+            "$ref": "#/components/schemas/Paused"
+          },
+          "trading": {
+            "$ref": "#/components/schemas/Trading"
+          }
+        },
+        "required": [
+          "trading",
+          "paused",
+          "config",
+          "editable"
+        ],
+        "title": "Snapshot",
+        "type": "object"
+      },
+      "Status": {
+        "properties": {
+          "db_version": {
+            "title": "Db Version",
+            "type": "string"
+          },
+          "markets": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MarketTimes"
+            },
+            "title": "Markets",
+            "type": "object"
+          },
+          "paused": {
+            "$ref": "#/components/schemas/Paused"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/Run"
+            },
+            "title": "Runs",
+            "type": "array"
+          },
+          "trading": {
+            "$ref": "#/components/schemas/Trading"
+          }
+        },
+        "required": [
+          "trading",
+          "paused",
+          "markets",
+          "runs",
+          "db_version"
+        ],
+        "title": "Status",
+        "type": "object"
+      },
+      "Trading": {
+        "properties": {
+          "allow_real": {
+            "title": "Allow Real",
+            "type": "boolean"
+          },
+          "broker": {
+            "enum": [
+              "sim",
+              "kis"
+            ],
+            "title": "Broker",
+            "type": "string"
+          },
+          "submit": {
+            "title": "Submit",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "broker",
+          "submit",
+          "allow_real"
+        ],
+        "title": "Trading",
+        "type": "object"
+      },
+      "TradingPatch": {
+        "additionalProperties": true,
+        "properties": {
+          "allow_real": {
+            "anyOf": [
+              {
+                "type": "boolean"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Trading"
+            "title": "Allow Real"
+          },
+          "broker": {
+            "anyOf": [
+              {
+                "enum": [
+                  "sim",
+                  "kis"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker"
+          },
+          "submit": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submit"
           }
         },
-        "title": "SettingsPatch",
+        "title": "TradingPatch",
         "type": "object"
       },
       "ValidationError": {
@@ -142,7 +693,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Order"
+                  },
+                  "title": "Response Orders Api V1 Orders Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -173,7 +730,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
               }
             },
             "description": "Successful Response"
@@ -202,7 +761,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Snapshot"
+                }
               }
             },
             "description": "Successful Response"
@@ -246,7 +807,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LogEntry"
+                  },
+                  "title": "Response Settings Log Api V1 Settings Log Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -277,7 +844,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
               }
             },
             "description": "Successful Response"
