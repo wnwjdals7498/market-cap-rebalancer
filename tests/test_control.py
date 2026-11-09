@@ -68,3 +68,20 @@ def test_allow_real_is_cli_only(conn):
         control.update(conn, {"trading": {"allow_real": True}}, "web")
     control.update(conn, {"trading": {"allow_real": True}}, "cli")
     assert control.trading_settings(conn)["allow_real"] is True
+
+
+@pytest.mark.parametrize("source", ["web", "cli"])
+def test_web_cannot_start_sending_orders_without_confirm(conn, source):
+    control.update(conn, {"trading": {"submit": True}}, source, confirm="SUBMIT")
+    before = control.snapshot(conn)
+    log = db.setting_changes(conn)
+    with pytest.raises(control.ControlError, match="SUBMIT"):
+        control.update(conn, {"trading": {"broker": "kis"}, "config": {"stock_pct": 70}}, "web")
+    assert control.snapshot(conn) == before
+    assert db.setting_changes(conn) == log
+    control.update(conn, {"trading": {"broker": "kis"}}, "web", confirm="SUBMIT")
+    assert control.trading_settings(conn)["broker"] == "kis"
+    control.update(conn, {"trading": {"broker": "sim"}}, "web")
+    control.update(conn, {"trading": {"broker": "kis"}}, "web", confirm="SUBMIT")
+    control.update(conn, {"trading": {"submit": False}}, "web")
+    assert control.trading_settings(conn) == {"broker": "kis", "submit": False, "allow_real": False}
