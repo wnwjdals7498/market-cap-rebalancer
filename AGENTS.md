@@ -39,6 +39,7 @@ npm run lint && npm run typecheck && npm test -- --run && npm run build
 |---|---|
 | `strategy.py` | 전략 규칙(순위 확정, 순위별 비율, 이동 상한, 매매 주기, 환전 차이). `Config` 가 모든 수치의 원천. 백테스트와 일일 루틴이 **같은 함수**를 쓴다 |
 | `backtest.py`, `data.py` | 과거 데이터 백테스트 |
+| `screener.py` | 후보 풀 검색(`screen_top`: yfinance `yf.screen` 시총 순, 보통주·중복 제거, 실패 시 `ScreenError`). 주 1회 갱신은 `jobs.py` 가 호출 |
 | `sources.py` | 실시간 데이터 소스 (`Source` 인터페이스) |
 | `kis_auth.py`, `kis_api.py` | KIS 인증(.env, 토큰 캐시), REST 클라이언트(호출 간격·재시도), `KisSource` |
 | `brokers.py`, `execution.py` | `Broker` 인터페이스·`SimBroker`, 지정가 사다리(±5%)·호가단위 |
