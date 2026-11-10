@@ -5,7 +5,7 @@ import json
 import math
 import re
 import sqlite3
-from dataclasses import asdict
+from dataclasses import asdict, fields, replace
 from typing import Any
 
 import db
@@ -53,6 +53,7 @@ OLD_STOCKS = {
 }
 OLD_BONDS = {"US": "IEF", "KR": "148070.KS"}
 CONFIG_VERSION = 2
+FX_PLAN = "fx:plan"  # {"from": "US"|"KR", "amount": <source pocket currency>, "created": date, "ready": date|None}
 
 
 def is_number(value) -> bool:
@@ -143,6 +144,17 @@ def drop_retired(conn: sqlite3.Connection, market: str, tickers: list[str], sour
         conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", ("retired", json.dumps(retired)))
         db.log_setting_change(conn, f"retired.{market}", current, left, source)
     notify.send(f"🧹 {market} 정리 완료: " + ", ".join(sorted(set(current) - set(left))))
+
+
+def load_config(conn: sqlite3.Connection) -> Config:
+    """The strategy Config from the stored settings (lists become tuples, unknown keys are ignored);
+    KR sell tax applies to the KR candidates and to retired KR stocks still being sold."""
+    known = {f.name for f in fields(Config)} - {"kr_taxable"}
+    saved: dict[str, Any] = {k: tuple(v) if isinstance(v, list) else v
+                             for k, v in db.get_setting(conn, "config", {}).items() if k in known}
+    cfg = Config(**saved)
+    retired = db.get_setting(conn, "retired", {}).get("KR", {})
+    return replace(cfg, kr_taxable=frozenset(cfg.kr_universe) | {t for t, role in retired.items() if role == "stock"})
 
 
 def trading_settings(conn: sqlite3.Connection) -> dict:

@@ -37,7 +37,7 @@ npm run lint && npm run typecheck && npm test -- --run && npm run build
 
 | 파일 | 역할 |
 |---|---|
-| `strategy.py` | 전략 규칙. 백테스트와 일일 루틴이 **같은 함수**를 쓴다 |
+| `strategy.py` | 전략 규칙(순위 확정, 순위별 비율, 이동 상한, 매매 주기, 환전 차이). `Config` 가 모든 수치의 원천. 백테스트와 일일 루틴이 **같은 함수**를 쓴다 |
 | `backtest.py`, `data.py` | 과거 데이터 백테스트 |
 | `sources.py` | 실시간 데이터 소스 (`Source` 인터페이스) |
 | `kis_auth.py`, `kis_api.py` | KIS 인증(.env, 토큰 캐시), REST 클라이언트(호출 간격·재시도), `KisSource` |
@@ -45,20 +45,21 @@ npm run lint && npm run typecheck && npm test -- --run && npm run build
 | `kis_broker.py` | KIS 잔고·매수가능·주문·체결조회·취소 (`KisBroker`) |
 | `markets.py` | 시장 정의, 세션별 signal/execute 시각 |
 | `db.py` | SQLite 스키마와 접근 함수 |
-| `control.py` | 설정 조회·검증·변경·이력·알림 |
-| `api.py` | 설정 API와 기존 웹 리포트 제공 |
+| `control.py` | 설정 조회·검증·변경·이력·알림, `load_config`(저장 설정 → `Config`), 정리 대상(`retired`), 일회성 설정 이관(`migrate`), `fx:plan` 키 |
+| `api.py` | 설정·상태 API(타입별 `limits`, 시장별 순위·목표, 환전 계획)와 기존 웹 리포트 제공 |
 | `notify.py` | 텔레그램 알림 (설정 없으면 꺼짐, 예외를 밖으로 던지지 않음) |
 | `report.py` | 일일 보고 텍스트 (SQLite 만 읽음) |
 | `webreport.py` | 웹 리포트 (단일 HTML, 인라인 SVG 차트, 로컬 서버: 읽기 전용, `/version` 폴링으로 자동 갱신) |
 | `frontend/` | 설정 웹 UI (React + Vite + TypeScript). `src/api/schema.d.ts` 는 `scripts/export_openapi.py` → `npm run gen:api` 생성물, `dist/` 는 git 에 넣지 않고 `api.py` 가 `/app/` 으로 서빙 |
-| `jobs.py` | CLI: init / signal / execute / tick / status / config / report / web |
+| `jobs.py` | CLI: init / signal / execute / tick / status / config / report / web. signal 은 매일 순위, 매매 주기에만 목표. 환전 계획(`fx_review`)은 일일 보고가 진행 |
 | `scripts/`, `deploy/` | 자동 실행 등록: Windows 작업 스케줄러 / Linux systemd (`deploy/DEPLOY.md`) |
 
 - 전략 규칙을 바꾸면 `strategy.py` 만 고치고, 백테스트를 다시 돌려 `results/summary.md` 갱신, README 규칙 표 갱신까지 같은 커밋에. 백테스트와 실운용 규칙이 갈라지면 백테스트 결과가 의미를 잃는다.
 - 전략 수치(비율, 일수, 수수료)는 `Config` 필드로 추가한다. 코드에 상수로 박지 않는다.
+- 설정 키를 없애거나 바꾸면 `control.migrate` 에 이관을 추가한다 (`load_config` 는 알 수 없는 키를 무시하지만, 의미가 바뀐 값은 옮겨야 한다). 설정 변경은 `control.update` 로만 한다 (검증·이력·알림).
 - 시각은 `exchange_calendars` 로만 계산한다. KST/ET 고정 시각이나 서머타임 분기를 직접 쓰지 않는다.
 - 새 데이터 소스(KRX, SEC, KIS 시세 등)는 `Source` 를 구현해 추가한다. `jobs.py` 에 소스별 분기를 넣지 않는다.
-- 데이터 검증(오래된 시세 40분, 주식수 ±20%, 시총 ±40%)은 완화하지 않는다. 바꿔야 하면 이유를 커밋 본문에 쓴다. 잘못된 시총 하나가 1위 교체 → 실제 매매로 이어진다.
+- 데이터 검증(오래된 시세 40분, 주식수 ±20%, 시총 ±40%)은 완화하지 않는다. 바꿔야 하면 이유를 커밋 본문에 쓴다. 잘못된 시총 하나가 순위 변경 → 실제 매매로 이어진다.
 - `runs` 테이블의 1세션 1회 실행 보장을 우회하지 않는다. 같은 날 두 번 돌면 3일 확정 카운트가 두 번 올라간다.
 - 실행 방식(CLI 인자, 실행 주기, 시간 제한, 웹 포트)을 바꾸면 Windows 스크립트와 `deploy/systemd/*`, `deploy/DEPLOY.md` 를 같이 고친다. 서버로 옮길 때 그대로 적용돼야 한다.
 - 주석·문서 밀도와 언어는 주변 코드를 따른다 (설정 필드 설명은 한국어, docstring 은 영어).

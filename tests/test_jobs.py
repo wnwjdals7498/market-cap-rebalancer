@@ -390,7 +390,7 @@ def test_load_config_converts_lists_and_ignores_unknown_keys(tmp_path):
     db.set_setting(conn, "config", {"rank_weights": [40, 30, 20, 5, 5], "kr_universe": ["000660.KS"] * 5,
                                     "kr_taxable": ["x"], "removed_key": 1})
     db.set_setting(conn, "retired", {"KR": {"207940.KS": "stock", "148070.KS": "bond"}, "US": {"IEF": "bond"}})
-    cfg = jobs.load_config(conn)
+    cfg = control.load_config(conn)
     assert cfg.rank_weights == (40, 30, 20, 5, 5) and cfg.kr_universe == ("000660.KS",) * 5
     assert cfg.kr_taxable == {"000660.KS", "207940.KS"}
 
@@ -484,7 +484,7 @@ def test_unmanaged_position_untouched(env):
 def test_kr_taxable_includes_retired_stock(tmp_path):
     conn = db.connect(tmp_path / "k.db")
     db.set_setting(conn, "retired", {"KR": {"207940.KS": "stock", "148070.KS": "bond"}})
-    taxable = jobs.load_config(conn).kr_taxable
+    taxable = control.load_config(conn).kr_taxable
     assert taxable == set(Config().kr_universe) | {"207940.KS"}
 
 
@@ -628,3 +628,18 @@ def test_no_fx_plan_when_disabled_or_in_band(env, no_real_alerts, enabled, us, k
     db.save_positions(conn, "2026-10-26", "KR", {CASH: kr}, {})
     report_at(conn, "2026-10-27", force=True)
     assert db.get_setting(conn, "fx:plan") is None and fx_alerts(no_real_alerts) == []
+
+
+def test_init_writes_the_new_config_and_needs_no_migration(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "init.db"
+    for args in (("init", "--usd", "1000", "--krw", "0", "--confirm-days", "2"), ("status",)):
+        monkeypatch.setattr(jobs.sys, "argv", ["jobs.py", "--db", str(path), *args])
+        jobs.main()
+        capsys.readouterr()
+    conn = db.connect(path)
+    saved = db.get_setting(conn, "config")
+    assert saved["confirm_days"] == 2 and saved["rank_weights"] == [50, 30, 20, 0, 0]
+    assert not set(control.OLD_KEYS) & set(saved)
+    assert db.get_setting(conn, "config:version") == control.CONFIG_VERSION
+    assert db.setting_changes(conn) == [] and db.get_setting(conn, "retired") is None
+    conn.close()

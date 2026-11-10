@@ -155,6 +155,8 @@ git pull && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m pyt
 
 `deploy/systemd/*` 가 바뀌었으면 `sudo deploy/install.sh` 를 다시 실행한다.
 
+순위 비율 전략으로 올린 뒤 첫 실행(tick 이나 웹 서버, 먼저 뜨는 쪽)은 저장된 설정을 한 번 이관한다 (`settings_log` 출처 `migration`, 텔레그램 1회). 확인: `jobs.py status` 후 `settings_log` 의 `migration` 행과 `config:version` 2.
+
 **백업** (`*.db` 는 git-ignore). 매매가 없는 시간에 하루 한 번 (`crontab -e`, 서버 시간대 기준):
 
 ```cron

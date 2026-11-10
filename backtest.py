@@ -1,98 +1,138 @@
-"""5-year backtest of the market-cap-leader / bond-ETF rebalancing strategy.
+"""5-year backtest of the rank-weight strategy (top-5 stocks by market cap + short/long bond ETFs).
 
-    python backtest.py                      # default: 60/40, 10%/day, 3-day confirm
-    python backtest.py --stock-pct 70 --step-pct 20 --confirm-days 5
+    python backtest.py                      # default: Config values (weekly trades, 10% per trade)
+    python backtest.py --rank-weights 100,0,0,0,0 --trade-every day --confirm-days 3
 """
 from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, replace
+from datetime import date
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 import data
-from strategy import CASH, Config, LeaderState, needs_rebalance, pocket_value, rebalance_pocket, update_state
+from strategy import (CASH, Config, RankState, fx_amount, fx_gap, needs_moves, pocket_value, pocket_weights,
+                      rebalance_moves, stock_weights, trade_due, update_ranking)
 
 OUT_DIR = Path(__file__).parent / "results"
 US_INDEX, KR_INDEX = "SPY", "069500.KS"  # S&P500, KODEX 200
+MARKETS = ("US", "KR")
+
+
+def _priced(prices: dict[str, float], tickers: set[str]) -> bool:
+    return all(np.isfinite(prices.get(t, np.nan)) for t in tickers)
 
 
 def run(md: dict[str, pd.DataFrame], cfg: Config, start: str, end: str | None,
-        us_universe: list[str], kr_universe: list[str], capital_krw: float = 100_000_000) -> dict:
+        capital_krw: float = 100_000_000) -> dict:
+    """Simulate `cfg` on `md` (see data.load_market_data).
+
+    Each open day the market's ranking is updated from the previous close's market caps (tickers
+    without one, e.g. not yet listed, are left out). Trades happen only on the first day of each
+    `trade_every` period. FX: when the US share of total assets leaves the band, the pocket with
+    too much reserves cash on its next trade day, the user exchanges it the following day
+    (minus `fx_spread`), and the receiving pocket invests it on its next trade day.
+    `fx_wait_days` is not used: the user is assumed to exchange right away.
+    """
     close, adj, mcap = md["close"], md["adj"].ffill(), md["mcap"]
     fx = adj[data.FX_TICKER]
     open_ = {"US": close[US_INDEX].notna(), "KR": close[KR_INDEX].notna()}
     # signal: ranking as of the previous close of that market (no look-ahead)
-    lagged = {m: mcap.reindex(columns=u).where(open_[m], axis=0).ffill().shift(1)
-              for m, u in (("US", us_universe), ("KR", kr_universe))}
-    universe = {"US": us_universe, "KR": kr_universe}
-    bond = {"US": cfg.us_bond, "KR": cfg.kr_bond}
+    lagged = {m: mcap.reindex(columns=list(cfg.universe(m))).where(open_[m], axis=0).ffill().shift(1)
+              for m in MARKETS}
 
     days = close.loc[start:end].index
     days = days[(open_["US"] | open_["KR"]).loc[days]]
     rate0 = fx.loc[:days[0]].iloc[-1]
     pockets = {"US": {CASH: capital_krw * cfg.us_pct / 100 / rate0},
                "KR": {CASH: capital_krw * (1 - cfg.us_pct / 100)}}
-    states = {m: LeaderState() for m in pockets}
+    states = {m: RankState() for m in MARKETS}
+    last_trade: dict[str, date | None] = {m: None for m in MARKETS}
+    trade_days: dict[str, list[date]] = {m: [] for m in MARKETS}
+    rank_changes = {m: 0 for m in MARKETS}
+    plan: dict | None = None  # {"from": market, "amount": pocket currency, "reserved": day | None}
+    fx_moves = 0
     cost_krw = traded_krw = 0.0
     rows, events = [], []
 
     for d in days:
         rate = fx.loc[d]
         prices = adj.loc[d].to_dict()
-        is_open = {m: bool(open_[m].loc[d]) for m in pockets}
+        is_open = {m: bool(open_[m].loc[d]) for m in MARKETS}
+        k = {"US": rate, "KR": 1.0}
 
-        if cfg.fx_mode == "combined" and all(is_open.values()):
+        if plan is not None and plan["reserved"] is not None and plan["reserved"] < d:
+            src, dst = plan["from"], "KR" if plan["from"] == "US" else "US"
+            amount = min(plan["amount"], max(pockets[src].get(CASH, 0.0), 0.0))
+            fee = amount * k[src] * cfg.fx_spread
+            pockets[src][CASH] = pockets[src].get(CASH, 0.0) - amount
+            pockets[dst][CASH] = pockets[dst].get(CASH, 0.0) + (amount * k[src] - fee) / k[dst]
+            cost_krw += fee
+            traded_krw += amount * k[src]
+            fx_moves += 1
+            plan = None
+
+        if plan is None and all(is_open.values()):
             us_krw = pocket_value(pockets["US"], prices) * rate
-            total = us_krw + pocket_value(pockets["KR"], prices)
-            gap = total * cfg.us_pct / 100 - us_krw  # KRW to move into US (+) / out (-)
-            if abs(gap) / total > max(cfg.band_pp / 100, 1e-9):
-                fee = abs(gap) * cfg.fx_spread
-                if gap > 0:
-                    pockets["KR"][CASH] = pockets["KR"].get(CASH, 0.0) - gap
-                    pockets["US"][CASH] = pockets["US"].get(CASH, 0.0) + (gap - fee) / rate
-                else:
-                    pockets["US"][CASH] = pockets["US"].get(CASH, 0.0) + gap / rate
-                    pockets["KR"][CASH] = pockets["KR"].get(CASH, 0.0) - gap - fee
-                cost_krw += fee
-                traded_krw += abs(gap)
+            kr_krw = pocket_value(pockets["KR"], prices)
+            gap = fx_gap(us_krw, kr_krw, cfg)
+            if gap:
+                src = "KR" if gap > 0 else "US"
+                amount_krw = fx_amount(gap, kr_krw if src == "KR" else us_krw, cfg)
+                plan = {"from": src, "amount": amount_krw / k[src], "reserved": None}
 
         for m, units in pockets.items():
             if not is_open[m]:
                 continue
-            if len(universe[m]) == 1:  # fixed holding (e.g. index benchmark), no ranking needed
-                ranked = universe[m]
+            universe = cfg.universe(m)
+            if len(universe) == 1:  # fixed holding (e.g. index benchmark), no ranking needed
+                ranked = list(universe)
             else:
                 row = lagged[m].loc[d].dropna()
                 if row.empty:  # need at least one signal day
                     continue
-                ranked = list(row.sort_values(ascending=False).index)
+                ranked = list(row.sort_values(ascending=False, kind="stable").index)
             st = states[m]
-            prev = (st.mode, st.leader, tuple(st.pair))
-            weights = update_state(st, ranked, cfg)
-            if prev != (st.mode, st.leader, tuple(st.pair)) and prev[1] is not None:
-                events.append({"date": d.date(), "market": m, "rank1": st.leader,
-                               "rank2": ranked[1] if len(ranked) > 1 else "", "mode": st.mode,
-                               "target": "/".join(weights)})
-            if needs_rebalance(units, prices, weights, bond[m], cfg):
-                new, cost, traded = rebalance_pocket(units, prices, weights, bond[m], m, cfg)
+            before = list(st.confirmed)
+            ranking = update_ranking(st, ranked, cfg)
+            if before and ranking != before:
+                rank_changes[m] += 1
+                events.append({"date": d.date(), "market": m, "ranking": "/".join(ranking)})
+            if not trade_due(d.date(), last_trade[m], cfg.trade_every):
+                continue
+
+            weights = pocket_weights(stock_weights(ranking, cfg), m, cfg)
+            held = {t for t, u in units.items() if t != CASH and u > 1e-12}
+            if not _priced(prices, set(weights) | held):  # retry on the next session
+                continue
+            last_trade[m] = d.date()
+            reserving = plan if plan is not None and plan["from"] == m and plan["reserved"] is None else None
+            value = pocket_value(units, prices)
+            if reserving is not None and value > 0:  # keep `amount` as cash: same as investable = value - amount
+                scale = max(value - reserving["amount"], 0.0) / value
+                weights = {t: w * scale for t, w in weights.items()}
+            if needs_moves(units, prices, weights, cfg):
+                new, cost, traded = rebalance_moves(units, prices, weights, m, cfg)
                 pockets[m] = new
-                k = rate if m == "US" else 1.0
-                cost_krw += cost * k
-                traded_krw += traded * k
+                cost_krw += cost * k[m]
+                traded_krw += traded * k[m]
+                trade_days[m].append(d.date())
+            if reserving is not None:
+                reserving["reserved"] = d
 
         us_val = pocket_value(pockets["US"], prices)
         kr_val = pocket_value(pockets["KR"], prices)
-        hold = {f"{m}:{t}": u * prices.get(t, 1.0) * (rate if m == "US" else 1.0)
+        hold = {f"{m}:{t}": u * prices.get(t, 1.0) * k[m]
                 for m, p in pockets.items() for t, u in p.items() if t != CASH and u > 1e-12}
         rows.append({"date": d, "total_krw": us_val * rate + kr_val, "us_usd": us_val, "kr_krw": kr_val,
                      "usdkrw": rate, **hold})
 
     curve = pd.DataFrame(rows).set_index("date")
-    return {"curve": curve, "cost_krw": cost_krw, "traded_krw": traded_krw,
-            "switches": {m: s.switches for m, s in states.items()}, "events": pd.DataFrame(events)}
+    return {"curve": curve, "cost_krw": cost_krw, "traded_krw": traded_krw, "fx_moves": fx_moves,
+            "rank_changes": rank_changes, "trade_days": trade_days, "events": pd.DataFrame(events)}
 
 
 def metrics(curve: pd.Series) -> dict[str, float]:
@@ -115,19 +155,29 @@ def yearly(curve: pd.Series) -> pd.Series:
     return r
 
 
+def _tickers(text: str) -> tuple[str, ...]:
+    return tuple(t.strip() for t in text.split(",") if t.strip())
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     defaults = Config()
     ap.add_argument("--start", default=None, help="default: 5 years before --end/today")
     ap.add_argument("--end", default=None)
     ap.add_argument("--capital", type=float, default=100_000_000, help="initial capital, KRW")
-    for name in ("stock_pct", "us_pct", "band_pp", "step_pct"):
+    for name in ("stock_pct", "us_pct", "band_pp", "step_pct", "short_bond_pct", "fx_band_pp"):
         ap.add_argument("--" + name.replace("_", "-"), type=float, default=getattr(defaults, name))
-    for name in ("confirm_days", "pair_confirm_days", "solo_after_days"):
+    for name in ("confirm_days", "fx_wait_days"):
         ap.add_argument("--" + name.replace("_", "-"), type=int, default=getattr(defaults, name))
-    ap.add_argument("--fx-mode", choices=["separate", "combined"], default=defaults.fx_mode)
-    ap.add_argument("--us-bond", default=defaults.us_bond)
-    ap.add_argument("--kr-bond", default=defaults.kr_bond)
+    ap.add_argument("--rank-weights", default=",".join(f"{w:g}" for w in defaults.rank_weights),
+                    help="stock weights for ranks 1..5 (%%), comma separated")
+    ap.add_argument("--trade-every", choices=["day", "week", "month"], default=defaults.trade_every)
+    ap.add_argument("--no-fx", action="store_true", help="never move cash between the US and KR pockets")
+    for name in ("us_universe", "kr_universe"):
+        ap.add_argument("--" + name.replace("_", "-"), type=_tickers, default=getattr(defaults, name),
+                        help="comma separated tickers")
+    for name in ("us_short_bond", "us_long_bond", "kr_short_bond", "kr_long_bond"):
+        ap.add_argument("--" + name.replace("_", "-"), default=getattr(defaults, name))
     ap.add_argument("--no-cost", action="store_true", help="zero fees/taxes/fx spread")
     ap.add_argument("--refresh", action="store_true", help="re-download data")
     a = ap.parse_args()
@@ -137,33 +187,36 @@ def main() -> None:
     fetch_start = str((pd.Timestamp(start) - pd.DateOffset(days=40)).date())
 
     cfg = Config(stock_pct=a.stock_pct, us_pct=a.us_pct, band_pp=a.band_pp, step_pct=a.step_pct,
-                 confirm_days=a.confirm_days, pair_confirm_days=a.pair_confirm_days,
-                 solo_after_days=a.solo_after_days, fx_mode=a.fx_mode,
-                 us_bond=a.us_bond, kr_bond=a.kr_bond, kr_taxable=frozenset(data.KR_UNIVERSE))
+                 confirm_days=a.confirm_days, short_bond_pct=a.short_bond_pct, fx_band_pp=a.fx_band_pp,
+                 fx_wait_days=a.fx_wait_days, trade_every=a.trade_every, fx_enabled=not a.no_fx,
+                 rank_weights=tuple(float(w) for w in a.rank_weights.split(",")),
+                 us_universe=a.us_universe, kr_universe=a.kr_universe,
+                 us_short_bond=a.us_short_bond, us_long_bond=a.us_long_bond,
+                 kr_short_bond=a.kr_short_bond, kr_long_bond=a.kr_long_bond,
+                 kr_taxable=frozenset(a.kr_universe))
     if a.no_cost:
         cfg = replace(cfg, us_fee=0, kr_fee=0, kr_stock_sell_tax=0, fx_spread=0)
 
-    md = data.load_market_data(fetch_start, a.end, extra=[cfg.us_bond, cfg.kr_bond, US_INDEX, KR_INDEX],
-                               refresh=a.refresh)
+    bonds = [*cfg.bonds("US"), *cfg.bonds("KR")]
+    md = data.load_market_data(fetch_start, a.end, extra=[*bonds, US_INDEX, KR_INDEX], refresh=a.refresh,
+                               mcap_tickers=[*cfg.us_universe, *cfg.kr_universe])
 
-    U, K = data.US_UNIVERSE, data.KR_UNIVERSE
-    never = 10**9
     scenarios = {
-        "전략 (설정값)": (cfg, U, K),
-        "전략, 2위 교체 확정 없이 즉시 10%씩": (replace(cfg, pair_confirm_days=0), U, K),
-        "전략 + 20일 유지 시 1위 단독 복귀": (replace(cfg, solo_after_days=20), U, K),
-        "전략, 주식/채권 밴드 ±5%p": (replace(cfg, band_pp=5), U, K),
-        "단순 교체 (1위 바뀌면 즉시 100% 이동)": (replace(cfg, step_pct=100, confirm_days=never), U, K),
-        "같은 60/40, 지수 (SPY / KODEX200)": (cfg, [US_INDEX], [KR_INDEX]),
-        "전략, 수수료·세금·환전비용 0": (replace(cfg, us_fee=0, kr_fee=0, kr_stock_sell_tax=0, fx_spread=0), U, K),
+        "전략 (설정값)": cfg,
+        "1위 단독 (100/0/0/0/0)": replace(cfg, rank_weights=(100, 0, 0, 0, 0)),
+        "순위 대기 3일": replace(cfg, confirm_days=3),
+        "매매 일간": replace(cfg, trade_every="day"),
+        "매매 월간": replace(cfg, trade_every="month"),
+        "이동 상한 100% (즉시)": replace(cfg, step_pct=100),
+        "같은 60/40, 지수 (SPY / KODEX200)": replace(cfg, us_universe=(US_INDEX,), kr_universe=(KR_INDEX,),
+                                                      rank_weights=(100, 0, 0, 0, 0)),
+        "전략, 수수료·세금·환전비용 0": replace(cfg, us_fee=0, kr_fee=0, kr_stock_sell_tax=0, fx_spread=0),
     }
-    if cfg.fx_mode == "separate":
-        scenarios["전략, 환전 포함 50:50 유지 (combined)"] = (replace(cfg, fx_mode="combined"), U, K)
 
     OUT_DIR.mkdir(exist_ok=True)
     table, curves, main_res = [], {}, None
-    for name, (c, us_u, kr_u) in scenarios.items():
-        res = run(md, c, start, a.end, us_u, kr_u, a.capital)
+    for name, c in scenarios.items():
+        res = run(md, c, start, a.end, a.capital)
         if main_res is None:
             main_res = res
         s = res["curve"]["total_krw"]
@@ -172,7 +225,9 @@ def main() -> None:
         table.append({"시나리오": name, "총수익률": m["total_return"], "CAGR": m["cagr"], "변동성": m["vol"],
                       "Sharpe(rf=0)": m["sharpe"], "MDD": m["mdd"], "최종자산(원)": s.iloc[-1],
                       "비용합계(원)": res["cost_krw"], "누적거래대금/초기자본": res["traded_krw"] / a.capital,
-                      "1위교체(US/KR)": f"{res['switches']['US']}/{res['switches']['KR']}"})
+                      "순위변경(US/KR)": f"{res['rank_changes']['US']}/{res['rank_changes']['KR']}",
+                      "매매일수(US/KR)": f"{len(res['trade_days']['US'])}/{len(res['trade_days']['KR'])}",
+                      "환전횟수": res["fx_moves"]})
 
     # buy & hold references, KRW basis
     adj = md["adj"].ffill().loc[curves[next(iter(curves))].index]
@@ -189,7 +244,7 @@ def main() -> None:
     curve_df = pd.DataFrame(curves)
     curve_df.to_csv(OUT_DIR / "equity_curves.csv", encoding="utf-8-sig")
     main_res["curve"].to_csv(OUT_DIR / "strategy_daily.csv", encoding="utf-8-sig")
-    main_res["events"].to_csv(OUT_DIR / "leader_events.csv", index=False, encoding="utf-8-sig")
+    main_res["events"].to_csv(OUT_DIR / "rank_events.csv", index=False, encoding="utf-8-sig")
     yr = pd.DataFrame({n: yearly(s) for n, s in curves.items()})
 
     pct = lambda v: f"{v:+.1%}" if pd.notna(v) else ""
@@ -200,6 +255,8 @@ def main() -> None:
     fmt["Sharpe(rf=0)"] = fmt["Sharpe(rf=0)"].map(lambda v: f"{v:.2f}")
     for col in ("최종자산(원)", "비용합계(원)"):
         fmt[col] = fmt[col].map(lambda v: f"{v:,.0f}" if pd.notna(v) else "")
+    if "환전횟수" in fmt:
+        fmt["환전횟수"] = fmt["환전횟수"].map(lambda v: f"{v:.0f}" if pd.notna(v) else "")
     fmt["누적거래대금/초기자본"] = fmt["누적거래대금/초기자본"].map(lambda v: f"{v:.1f}x" if pd.notna(v) else "")
     fmt = fmt.fillna("")
 
@@ -210,7 +267,7 @@ def main() -> None:
     (OUT_DIR / "summary.md").write_text("\n".join(md_out), encoding="utf-8")
     print("\n".join(md_out))
     if not main_res["events"].empty:
-        print("\n## 1위/모드 변경 (메인 전략)\n")
+        print("\n## 확정 순위 변경 (메인 전략)\n")
         print(main_res["events"].to_markdown(index=False))
 
 

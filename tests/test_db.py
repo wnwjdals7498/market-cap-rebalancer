@@ -1,5 +1,5 @@
 import db
-from strategy import LeaderState, RankState
+from strategy import RankState
 
 
 def test_claim_run_is_idempotent(tmp_path):
@@ -11,15 +11,6 @@ def test_claim_run_is_idempotent(tmp_path):
     assert db.claim_run(conn, "signal", "KR", "2026-10-27", force=True)
     db.finish_run(conn, "signal", "KR", "2026-10-27", "FAILED", "boom")
     assert db.claim_run(conn, "signal", "KR", "2026-10-27")  # failed runs may retry
-
-
-def test_state_roundtrip_uses_previous_session(tmp_path):
-    conn = db.connect(tmp_path / "t.db")
-    st = LeaderState(mode="SPLIT", holding="AAPL", leader="NVDA", streak=3, pair=["NVDA", "AAPL"],
-                     candidate="MSFT", cand_streak=1, switches=4)
-    db.save_state(conn, "2026-10-26", "US", st)
-    assert db.load_state(conn, "US", "2026-10-27") == st
-    assert db.load_state(conn, "US", "2026-10-26") == LeaderState()  # same-day re-run starts from prior day
 
 
 def test_positions_and_shares(tmp_path):

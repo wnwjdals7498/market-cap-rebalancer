@@ -18,7 +18,7 @@ import math
 import sqlite3
 import sys
 import time
-from dataclasses import asdict, fields, replace
+from dataclasses import asdict
 from datetime import date as dt_date, time as dtime, timedelta
 from pathlib import Path
 from typing import Any
@@ -31,6 +31,7 @@ import notify
 import report
 import webreport
 from brokers import Broker, SimBroker
+from control import FX_PLAN, load_config
 from execution import ExecParams, execute, limit_price
 from markets import MARKETS, Market, current_session, session_times
 from sources import FallbackSource, Quote, Source, YFinanceSource
@@ -49,15 +50,6 @@ NO_TRADE = report.NO_TRADE  # execute detail on days outside the trade cadence (
 
 class JobError(RuntimeError):
     pass
-
-
-def load_config(conn: sqlite3.Connection) -> Config:
-    known = {f.name for f in fields(Config)} - {"kr_taxable"}
-    saved: dict[str, Any] = {k: tuple(v) if isinstance(v, list) else v
-             for k, v in db.get_setting(conn, "config", {}).items() if k in known}
-    cfg = Config(**saved)
-    retired = db.get_setting(conn, "retired", {}).get("KR", {})
-    return replace(cfg, kr_taxable=frozenset(cfg.kr_universe) | {t for t, role in retired.items() if role == "stock"})
 
 
 def fresh_quotes(src: Source, tickers: list[str], session: str, tz: str, now: pd.Timestamp) -> dict[str, Quote]:
@@ -304,7 +296,6 @@ def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source
     return _guarded("execute", conn, mkt, session, force, work)
 
 
-FX_PLAN = "fx:plan"      # {"from": "US"|"KR", "amount": <source pocket currency>, "created": date, "ready": date|None}
 FX_CASH_TOLERANCE = 0.99  # fees and share rounding leave the reserved cash a hair under the amount
 POCKET = {"US": ("미국", "원화"), "KR": ("한국", "달러")}  # pocket name, currency it is exchanged into
 
@@ -527,8 +518,7 @@ def main() -> None:
     p.add_argument("--krw", type=float, required=True)
     for name in ("stock_pct", "step_pct", "min_trade_pct"):
         p.add_argument("--" + name.replace("_", "-"), type=float)
-    for name in ("confirm_days", "pair_confirm_days", "solo_after_days"):
-        p.add_argument("--" + name.replace("_", "-"), type=int)
+    p.add_argument("--confirm-days", type=int)
     for job in ("signal", "execute"):
         p = sub.add_parser(job)
         p.add_argument("--market", choices=list(MARKETS), required=True)
@@ -566,11 +556,11 @@ def main() -> None:
     now = pd.Timestamp.now(tz="UTC")
 
     if a.cmd == "init":
-        overrides = {k: getattr(a, k) for k in ("stock_pct", "step_pct", "min_trade_pct", "confirm_days",
-                                                "pair_confirm_days", "solo_after_days")
+        overrides = {k: getattr(a, k) for k in ("stock_pct", "step_pct", "min_trade_pct", "confirm_days")
                      if getattr(a, k) is not None}
         cfg = {k: v for k, v in asdict(Config()).items() if k != "kr_taxable"} | overrides
         db.set_setting(conn, "config", cfg)
+        db.set_setting(conn, "config:version", control.CONFIG_VERSION)  # a fresh config needs no migration
         today = now.tz_convert("Asia/Seoul").strftime("%Y-%m-%d")
         db.save_positions(conn, today, "US", {CASH: a.usd}, {})
         db.save_positions(conn, today, "KR", {CASH: a.krw}, {})

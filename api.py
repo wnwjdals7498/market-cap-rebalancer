@@ -20,7 +20,6 @@ from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr, WithJsonSchem
 
 import control
 import db
-import jobs
 import webreport
 from markets import MARKETS, current_session
 
@@ -227,7 +226,7 @@ def create_app(db_path: Path | str, token: str | None,
                            "confirmed": db.load_rank_state(conn, code, "9999-12-31").confirmed,
                            "targets": db.latest_targets(conn, code),
                            "last_trade": db.last_trade_date(conn, code)} for code in MARKETS}
-        plan = db.get_setting(conn, jobs.FX_PLAN)
+        plan = db.get_setting(conn, control.FX_PLAN)
         fx = plan and {"from_market": plan["from"], "amount": plan["amount"],
                        "currency": MARKETS[plan["from"]].currency, "created": plan["created"],
                        "ready": plan["ready"]}

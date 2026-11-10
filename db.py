@@ -7,7 +7,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from strategy import LeaderState, RankState
+from strategy import RankState
 
 DEFAULT_DB = Path(__file__).parent / "mcr.db"
 # A RUNNING row older than this belongs to a process that died (PC slept, task killed). Longer than
@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS rankings (
     mcap         REAL NOT NULL,
     PRIMARY KEY (session_date, market, rank)
 );
-CREATE TABLE IF NOT EXISTS leader_state (
+CREATE TABLE IF NOT EXISTS leader_state (  -- unused since rank_state; kept so existing DBs stay valid
     session_date TEXT NOT NULL,
     market       TEXT NOT NULL,
     mode         TEXT NOT NULL,
@@ -258,28 +258,6 @@ def save_rankings(conn: sqlite3.Connection, session_date: str, market: str, rank
         conn.execute("DELETE FROM rankings WHERE session_date = ? AND market = ?", (session_date, market))
         conn.executemany("INSERT INTO rankings VALUES (?, ?, ?, ?, ?)",
                          [(session_date, market, i + 1, t, m) for i, (t, m) in enumerate(ranked)])
-
-
-# --- leader state -----------------------------------------------------------
-
-def load_state(conn: sqlite3.Connection, market: str, before: str) -> LeaderState:
-    """State after the last session strictly before `before` (fresh state if none)."""
-    row = conn.execute("SELECT * FROM leader_state WHERE market = ? AND session_date < ? "
-                       "ORDER BY session_date DESC LIMIT 1", (market, before)).fetchone()
-    if not row:
-        return LeaderState()
-    return LeaderState(mode=row["mode"], holding=row["holding"], leader=row["leader"], streak=row["streak"],
-                       pair=json.loads(row["pair"]), candidate=row["candidate"], cand_streak=row["cand_streak"],
-                       switches=row["switches"])
-
-
-def save_state(conn: sqlite3.Connection, session_date: str, market: str, state: LeaderState) -> None:
-    s = asdict(state)
-    s["pair"] = json.dumps(s["pair"])
-    with conn:
-        conn.execute("INSERT OR REPLACE INTO leader_state VALUES (:session_date, :market, :mode, :holding, "
-                     ":leader, :streak, :pair, :candidate, :cand_streak, :switches)",
-                     {"session_date": session_date, "market": market, **s})
 
 
 # --- rank state -------------------------------------------------------------

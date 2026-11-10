@@ -27,7 +27,7 @@ def test_update_logs_and_notifies_once(conn, no_real_alerts):
     assert {r["key"] for r in rows} == {"config.stock_pct", "config.confirm_days", "paused.KR"}
     assert all(r["source"] == "web" for r in rows)
     assert len(no_real_alerts) == 1 and "config.stock_pct 60.0 → 70.0" in no_real_alerts[0]
-    assert jobs.load_config(conn).stock_pct == 70
+    assert control.load_config(conn).stock_pct == 70
 
 
 def test_noop_update_writes_nothing(conn, no_real_alerts):
@@ -113,7 +113,7 @@ def test_typed_settings_validation(conn):
     assert db.get_setting(conn, "config")["trade_every"] == "month"
     assert control.update(conn, {"config": {"rank_weights": [40, 30, 20, 5, 5]}}, "web")["config"][
         "rank_weights"] == [40, 30, 20, 5, 5]
-    assert jobs.load_config(conn).rank_weights == (40, 30, 20, 5, 5)
+    assert control.load_config(conn).rank_weights == (40, 30, 20, 5, 5)
 
 
 def test_system_and_migration_sources_are_allowed(conn):
@@ -153,7 +153,7 @@ def test_migrate_fresh_db_only_sets_version(conn, no_real_alerts):
 def test_migrate_old_config_once(conn, no_real_alerts):
     db.set_setting(conn, "config", OLD_CONFIG)
     assert control.migrate(conn) is True
-    cfg = jobs.load_config(conn)
+    cfg = control.load_config(conn)
     assert cfg.confirm_days == 0 and cfg.us_pct == 60
     assert not set(control.OLD_KEYS) & set(db.get_setting(conn, "config"))
     retired = db.get_setting(conn, "retired")

@@ -8,8 +8,6 @@ from functools import lru_cache
 import exchange_calendars as xcals
 import pandas as pd
 
-import data
-
 SIGNAL_LEAD = timedelta(hours=1)  # 시총 조회/목표 계산은 거래 1시간 전
 
 
@@ -18,13 +16,12 @@ class Market:
     code: str               # "US" | "KR"
     calendar: str           # exchange_calendars code
     currency: str
-    universe: tuple[str, ...]
     execute_at: time | None  # local exchange time; None = session midpoint
 
 
 MARKETS = {
-    "KR": Market("KR", "XKRX", "KRW", tuple(data.KR_UNIVERSE), time(12, 0)),
-    "US": Market("US", "XNYS", "USD", tuple(data.US_UNIVERSE), None),
+    "KR": Market("KR", "XKRX", "KRW", time(12, 0)),
+    "US": Market("US", "XNYS", "USD", None),
 }
 
 

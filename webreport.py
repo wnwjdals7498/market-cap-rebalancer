@@ -6,6 +6,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
+import control
 import report
 from report import name
 
@@ -178,9 +179,7 @@ def _won_axis(v: float) -> str:
 
 
 def market_card(conn: sqlite3.Connection, market: str) -> str:
-    from jobs import load_config  # local: jobs imports this module
-
-    universe = list(load_config(conn).universe(market))
+    universe = list(control.load_config(conn).universe(market))
     slot = {t: i for i, t in enumerate(universe)}
     lines, value, warns = report.market_section(conn, market)
     head = esc(lines[0].split(" ", 1)[1])  # drop the flag emoji: Windows renders it as two letters
