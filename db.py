@@ -279,9 +279,12 @@ def save_rank_state(conn: sqlite3.Connection, session_date: str, market: str, st
 
 
 def last_trade_date(conn: sqlite3.Connection, market: str, before: str | None = None) -> str | None:
-    """Latest session whose execute finished OK (strictly before `before` when given)."""
+    """Latest session whose execute finished OK (strictly before `before` when given). Trades from before
+    the rank-weight strategy took over (`rank:since`, set by control.migrate) do not count."""
+    since = get_setting(conn, "rank:since")
     row = conn.execute("SELECT MAX(session_date) FROM runs WHERE job = 'execute' AND market = ? AND status = 'OK' "
-                       "AND (? IS NULL OR session_date < ?)", (market, before, before)).fetchone()
+                       "AND (? IS NULL OR session_date < ?) AND (? IS NULL OR session_date >= ?)",
+                       (market, before, before, since, since)).fetchone()
     return row[0]
 
 

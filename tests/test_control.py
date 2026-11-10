@@ -142,6 +142,7 @@ def test_migrate_fresh_db_only_sets_version(conn, no_real_alerts):
     assert control.migrate(conn) is False
     assert db.get_setting(conn, "config:version") == 2
     assert db.get_setting(conn, "retired") is None and db.setting_changes(conn) == []
+    assert db.get_setting(conn, "rank:since") is None  # a new DB has no old-strategy trades to ignore
     new_style = {k: v for k, v in OLD_CONFIG.items() if k not in control.OLD_KEYS}
     db.set_setting(conn, "config:version", 1)
     db.set_setting(conn, "config", new_style)  # as `init` writes once the old fields are gone
@@ -152,7 +153,8 @@ def test_migrate_fresh_db_only_sets_version(conn, no_real_alerts):
 
 def test_migrate_old_config_once(conn, no_real_alerts):
     db.set_setting(conn, "config", OLD_CONFIG)
-    assert control.migrate(conn) is True
+    assert control.migrate(conn, today="2026-11-10") is True
+    assert db.get_setting(conn, "rank:since") == "2026-11-10"
     cfg = control.load_config(conn)
     assert cfg.confirm_days == 0 and cfg.us_pct == 60
     assert not set(control.OLD_KEYS) & set(db.get_setting(conn, "config"))
@@ -164,6 +166,7 @@ def test_migrate_old_config_once(conn, no_real_alerts):
     assert log and {r["source"] for r in log} == {"migration"}
     assert db.get_setting(conn, "config:version") == 2 and len(no_real_alerts) == 1
 
-    assert control.migrate(conn) is False
+    assert control.migrate(conn, today="2026-11-20") is False
+    assert db.get_setting(conn, "rank:since") == "2026-11-10"  # set once
     assert db.setting_changes(conn) == log and len(no_real_alerts) == 1
     assert db.get_setting(conn, "retired") == retired

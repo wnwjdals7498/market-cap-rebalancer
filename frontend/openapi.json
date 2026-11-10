@@ -15,6 +15,17 @@
             "title": "Currency",
             "type": "string"
           },
+          "exchange": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exchange"
+          },
           "from_market": {
             "title": "From Market",
             "type": "string"

@@ -174,6 +174,17 @@ describe('settings UI', () => {
     expect(screen.getByText(/미국 포켓 \$9,000 환전 필요 \(생성 2026-11-10\), 현금 확보 중/)).toBeInTheDocument()
   })
 
+  it('shows the cash to exchange once the fx plan is ready', async () => {
+    stubFetch({
+      'GET /api/v1/status': () => json({
+        ...status,
+        fx: { from_market: 'US', amount: 9000, currency: 'USD', created: '2026-11-10', ready: '2026-11-11', exchange: 5200.5 },
+      }),
+    })
+    render(<StatusPanel client={createClient('t')} onUnauthorized={() => {}} />)
+    expect(await screen.findByText(/미국 포켓 \$5,200.5 환전 필요 \(생성 2026-11-10\), 현금 확보 완료 2026-11-11/)).toBeInTheDocument()
+  })
+
   it('status shows fx plan as none when there is no plan', async () => {
     stubFetch({ 'GET /api/v1/status': () => json(status) })
     render(<StatusPanel client={createClient('t')} onUnauthorized={() => {}} />)

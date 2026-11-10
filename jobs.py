@@ -179,7 +179,11 @@ def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source,
         investable = value
         plan = db.get_setting(conn, FX_PLAN)
         if cfg.fx_enabled and plan and plan["from"] == mkt.code:
-            investable = max(value - plan["amount"], 0.0)  # keep the cash the user is asked to exchange out of the market, ready or not
+            # keep the cash the user is asked to exchange out of the market, ready or not -- unless a ready
+            # plan's cash has already left (the user exchanged; the next report confirms): don't rebuild it
+            exchanged = plan["ready"] and units.get(CASH, 0.0) < FX_READY * fx_exchange(plan)
+            if not exchanged:
+                investable = max(value - plan["amount"], 0.0)
 
         top = " > ".join(t for t, _ in ranked[:3])
         last = db.last_trade_date(conn, mkt.code, before=session)
@@ -249,6 +253,13 @@ def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source
         if not targets:
             return "SKIPPED", NO_TRADE
         retired = retired_of(conn, mkt)
+        allowed = set(cfg.universe(mkt.code)) | set(cfg.bonds(mkt.code)) | set(retired)
+        stale = sorted(set(targets) - allowed)
+        if stale:  # the lists changed after the signal: never trade what the strategy no longer manages
+            log.warning("%s %s: dropping stored targets outside the strategy: %s", mkt.code, session, stale)
+            targets = {t: v for t, v in targets.items() if t in allowed}
+            if not targets:
+                raise JobError(f"stored targets name no managed ticker {stale}; run the signal again")
         units = managed(broker.balance(mkt.code) if broker else db.latest_positions(conn, mkt.code)[1],
                         mkt, cfg, retired)
         tickers = sorted((set(targets) | set(units)) - {CASH})
@@ -296,8 +307,13 @@ def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source
     return _guarded("execute", conn, mkt, session, force, work)
 
 
-FX_CASH_TOLERANCE = 0.99  # fees and share rounding leave the reserved cash a hair under the amount
+FX_READY = 0.5  # a plan is ready once the source pocket holds this share of the amount in cash (and "exchanged" below it)
 POCKET = {"US": ("미국", "원화"), "KR": ("한국", "달러")}  # pocket name, currency it is exchanged into
+
+
+def fx_exchange(plan: dict) -> float:
+    """The cash the user was asked to exchange (the planned amount until the plan is ready)."""
+    return plan.get("exchange") or plan["amount"]
 
 
 def fx_review(conn: sqlite3.Connection, today: str, usdkrw: float | None, cfg: Config, send: bool) -> list[str]:
@@ -320,11 +336,11 @@ def fx_review(conn: sqlite3.Connection, today: str, usdkrw: float | None, cfg: C
     if plan:
         src = plan["from"]
         pocket, other = POCKET[src]
-        amount, cash = plan["amount"], report.pocket_cash(conn, src) or 0.0
+        amount, cash = fx_exchange(plan), report.pocket_cash(conn, src) or 0.0
         money = report.money(amount, src)
         ready = plan["ready"]
         days = (dt_date.fromisoformat(today) - dt_date.fromisoformat(ready)).days if ready else 0
-        if ready and cash < amount * 0.5:  # (1) the user exchanged
+        if ready and cash < amount * FX_READY:  # (1) the user exchanged
             drop()
             alert(f"💱 환전 완료 확인: {pocket} 포켓 {money} → {other}. 환전 계획을 지웁니다")
             return [f"  💱 환전 완료 확인 ({pocket} 포켓 {money}), 계획 삭제"]
@@ -338,10 +354,12 @@ def fx_review(conn: sqlite3.Connection, today: str, usdkrw: float | None, cfg: C
             drop()
             alert("💱 비율 회복: 환전 계획을 지웁니다" if cfg.fx_enabled else "💱 환전 안내가 꺼져 환전 계획을 지웁니다")
             return ["  💱 미국/한국 비율 회복, 환전 계획 삭제" if cfg.fx_enabled else "  💱 환전 안내 꺼짐, 환전 계획 삭제"]
-        if not ready and cash >= amount * FX_CASH_TOLERANCE:  # (3) the cash is waiting
+        if not ready and cash >= plan["amount"] * FX_READY:  # (3) the cash is waiting
             ready = today
+            amount = round(min(cash, plan["amount"]), 2)  # exchange what is there, not the full plan
+            money = report.money(amount, src)
             if send:
-                db.set_setting(conn, FX_PLAN, plan | {"ready": ready})
+                db.set_setting(conn, FX_PLAN, plan | {"ready": ready, "exchange": amount})
             alert(f"💱 환전 안내: {pocket} 포켓 현금 {money} 를 {other}로 환전하세요")
         if ready:
             return [f"  💱 환전 필요: {pocket} 포켓 현금 {money} 를 {other}로 환전하세요 (안내 {ready}, {cfg.fx_wait_days}일 안에)"]

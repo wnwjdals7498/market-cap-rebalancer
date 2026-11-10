@@ -532,6 +532,7 @@ def test_fx_plan_ready_alert_once_then_exchanged(fx_env, no_real_alerts):
 
     report_at(conn, "2026-10-28", force=True)
     assert db.get_setting(conn, "fx:plan")["ready"] == "2026-10-28"
+    assert db.get_setting(conn, "fx:plan")["exchange"] == 10_000.0
     notices = [m for m in no_real_alerts if m.startswith("💱 환전 안내")]
     assert len(notices) == 1 and "미국 포켓 현금 $10,000.00 를 원화로 환전하세요" in notices[0]
     no_real_alerts.clear()
@@ -643,3 +644,80 @@ def test_init_writes_the_new_config_and_needs_no_migration(tmp_path, monkeypatch
     assert db.get_setting(conn, "config:version") == control.CONFIG_VERSION
     assert db.setting_changes(conn) == [] and db.get_setting(conn, "retired") is None
     conn.close()
+
+
+def test_old_strategy_execute_does_not_count_as_this_weeks_trade(env):
+    conn, src, _ = env
+    cfg = Config(us_fee=0, fx_enabled=False)  # weekly
+    db.set_setting(conn, "config", {"pair_confirm_days": 3, "confirm_days": 3, "us_pct": 50.0, "fx_enabled": False})
+    db.claim_run(conn, "execute", "US", "2026-11-09")  # Monday: the old strategy's last trade
+    db.finish_run(conn, "execute", "US", "2026-11-09", "OK")
+    assert control.migrate(conn, today="2026-11-10") is True
+    assert db.last_trade_date(conn, "US") is None
+    set_day(src, "2026-11-10", TOP3)
+    jobs.run_signal(conn, US, "2026-11-10", src, cfg, pd.Timestamp("2026-11-10 11:50", tz=NY))  # Tuesday, same ISO week
+    assert db.load_targets(conn, "2026-11-10", "US")
+    db.claim_run(conn, "execute", "US", "2026-11-10")
+    db.finish_run(conn, "execute", "US", "2026-11-10", "OK")
+    assert db.last_trade_date(conn, "US") == "2026-11-10"
+
+
+def test_fx_ready_at_half_the_amount_and_exchange_is_the_cash_on_hand(fx_env, no_real_alerts):
+    conn, src, cfg = fx_env
+    report_at(conn, "2026-10-27")  # amount $10,000
+    units = db.latest_positions(conn, "US")[1]
+    px = {t: 100.0 for t in units if t != CASH}
+    db.save_positions(conn, "2026-10-27", "US", units | {CASH: 4_000.0}, px)
+    report_at(conn, "2026-10-28", force=True)  # 40% of the amount: not ready
+    assert db.get_setting(conn, "fx:plan")["ready"] is None
+    db.save_positions(conn, "2026-10-28", "US", units | {CASH: 6_000.0}, px)
+    no_real_alerts.clear()
+    report_at(conn, "2026-10-29", force=True)  # 60%: ready, and the user is told to exchange what is there
+    plan = db.get_setting(conn, "fx:plan")
+    assert plan["ready"] == "2026-10-29" and plan["exchange"] == 6_000.0 and plan["amount"] == 10_000.0
+    assert any("현금 $6,000.00 를 원화로 환전하세요" in m for m in no_real_alerts)
+    assert "$6,000.00 를 원화로 환전하세요" in no_real_alerts[-1]
+    db.save_positions(conn, "2026-10-29", "US", units | {CASH: 2_900.0}, px)
+    report_at(conn, "2026-10-30", force=True)  # below half of what was set aside: exchanged
+    assert db.get_setting(conn, "fx:plan") is None
+
+
+def test_exchanged_ready_plan_is_not_rebuilt_by_the_next_daily_signal(fx_env, no_real_alerts):
+    conn, src, cfg = fx_env  # trade_every="day"
+    report_at(conn, "2026-10-27")
+    run_day(conn, src, cfg, "2026-10-27", TOP3)
+    report_at(conn, "2026-10-28", force=True)
+    assert db.get_setting(conn, "fx:plan")["ready"] == "2026-10-28"
+
+    units = db.latest_positions(conn, "US")[1] | {CASH: 0.0}  # the user exchanged the cash
+    db.save_positions(conn, "2026-10-28", "US", units, {t: 100.0 for t in units})
+    after = run_day(conn, src, cfg, "2026-10-29", TOP3)
+    assert sum(w for w, _ in db.load_targets(conn, "2026-10-29", "US").values()) == pytest.approx(1.0)
+    assert {t: q for t, q in after.items() if t != CASH} == {t: q for t, q in units.items() if t != CASH}  # nothing sold
+    report_at(conn, "2026-10-30", force=True)
+    assert db.get_setting(conn, "fx:plan") is None
+    assert db.get_setting(conn, "config")["fx_enabled"] is True
+    assert any("환전 완료" in m for m in no_real_alerts)
+
+
+def test_execute_drops_targets_the_strategy_no_longer_manages(env):
+    conn, src, cfg = env
+    set_day(src, "2026-10-26", TOP3)
+    src.prices["META"] = 100.0
+    jobs.run_signal(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 11:50", tz=NY))
+    targets = db.load_targets(conn, "2026-10-26", "US")
+    db.save_targets(conn, "2026-10-26", "US", targets | {"META": (0.2, 100.0)})  # candidates changed since the signal
+    src.quote_time = pd.Timestamp("2026-10-26 12:40", tz=NY)
+    acct = AccountBroker({"US": {CASH: 100_000.0}}, src.prices, cfg)
+    jobs.run_execute(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 12:50", tz=NY), broker=acct,
+                     dry_run=True)
+    tickers = {r["ticker"] for r in conn.execute("SELECT ticker FROM orders")}
+    assert tickers == {"AAPL", "NVDA", "MSFT", "SHY"}
+
+    db.save_targets(conn, "2026-10-27", "US", {"META": (1.0, 100.0)})
+    db.claim_run(conn, "signal", "US", "2026-10-27")
+    db.finish_run(conn, "signal", "US", "2026-10-27", "OK")
+    set_day(src, "2026-10-27", TOP3)
+    with pytest.raises(jobs.JobError, match="no managed ticker"):  # never sell everything for lack of targets
+        jobs.run_execute(conn, US, "2026-10-27", src, cfg, pd.Timestamp("2026-10-27 12:50", tz=NY), broker=acct,
+                         dry_run=True)

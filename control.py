@@ -6,7 +6,9 @@ import math
 import re
 import sqlite3
 from dataclasses import asdict, fields, replace
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import db
 import notify
@@ -240,8 +242,11 @@ def update(conn: sqlite3.Connection, changes: dict, source: str, confirm: str | 
     return result
 
 
-def migrate(conn: sqlite3.Connection) -> bool:
-    """Move a stored pre-rank-weights config to version 2 once; return True if anything changed."""
+def migrate(conn: sqlite3.Connection, today: str | None = None) -> bool:
+    """Move a stored pre-rank-weights config to version 2 once; return True if anything changed.
+    `today` (KST date, default now) becomes `rank:since`: executes before it are old-strategy trades
+    and must not count as this week's trade."""
+    today = today or datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
     if db.get_setting(conn, "config:version", 0) >= CONFIG_VERSION:
         return False
     saved = db.get_setting(conn, "config", {})
@@ -276,5 +281,6 @@ def migrate(conn: sqlite3.Connection) -> bool:
         conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", ("config", json.dumps(migrated)))
         conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", ("retired", json.dumps(retired)))
         conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", ("config:version", json.dumps(CONFIG_VERSION)))
+        conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", ("rank:since", json.dumps(today)))
     notify.send("⚙️ 설정 이관 (migration): " + ", ".join(recorded) + f" | 정리 대상 {retired}")
     return True

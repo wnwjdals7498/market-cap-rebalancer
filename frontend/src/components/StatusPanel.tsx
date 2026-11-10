@@ -12,7 +12,9 @@ function money(amount: number, currency: string): string {
 }
 
 function fxText(fx: FxPlan): string {
-  const base = `${POCKET[fx.from_market] ?? fx.from_market} 포켓 ${money(fx.amount, fx.currency)} 환전 필요 (생성 ${fx.created})`
+  // once the plan is ready the amount to exchange is the cash actually set aside
+  const amount = fx.exchange ?? fx.amount
+  const base = `${POCKET[fx.from_market] ?? fx.from_market} 포켓 ${money(amount, fx.currency)} 환전 필요 (생성 ${fx.created})`
   return fx.ready ? `${base}, 현금 확보 완료 ${fx.ready}` : `${base}, 현금 확보 중`
 }
 

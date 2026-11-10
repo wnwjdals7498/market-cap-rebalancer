@@ -85,6 +85,8 @@ export interface components {
             created: string;
             /** Currency */
             currency: string;
+            /** Exchange */
+            exchange?: number | null;
             /** From Market */
             from_market: string;
             /** Ready */

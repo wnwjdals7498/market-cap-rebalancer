@@ -194,4 +194,9 @@ def test_status_includes_strategy_and_fx(client, db_path):
                                    "targets": {"NVDA": 0.3, "SHY": 0.4}, "last_trade": "2026-11-09"}
     assert s["strategy"]["KR"]["ranking"] == []
     assert s["fx"] == {"from_market": "US", "amount": 9000.0, "currency": "USD", "created": "2026-11-10",
-                       "ready": None}
+                       "ready": None, "exchange": None}
+    conn = db.connect(db_path)
+    db.set_setting(conn, "fx:plan", {"from": "US", "amount": 9000.0, "created": "2026-11-10",
+                                     "ready": "2026-11-11", "exchange": 5200.5})
+    conn.close()
+    assert client.get("/api/v1/status", headers=H).json()["fx"]["exchange"] == 5200.5

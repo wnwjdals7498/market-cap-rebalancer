@@ -77,6 +77,7 @@ class FxPlan(BaseModel):
     currency: str
     created: str
     ready: str | None
+    exchange: float | None = None  # cash to exchange, once the plan is ready
 
 
 class Status(BaseModel):
@@ -229,7 +230,7 @@ def create_app(db_path: Path | str, token: str | None,
         plan = db.get_setting(conn, control.FX_PLAN)
         fx = plan and {"from_market": plan["from"], "amount": plan["amount"],
                        "currency": MARKETS[plan["from"]].currency, "created": plan["created"],
-                       "ready": plan["ready"]}
+                       "ready": plan["ready"], "exchange": plan.get("exchange")}
         return {"trading": control.trading_settings(conn), "paused": control.paused(conn),
                 "markets": market_status, "runs": runs, "strategy": strategy, "fx": fx or None,
                 "db_version": webreport.db_version(db_path)}
