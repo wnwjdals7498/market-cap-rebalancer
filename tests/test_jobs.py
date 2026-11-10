@@ -9,11 +9,16 @@ import jobs
 from markets import MARKETS
 from sources import Quote
 from brokers import SimBroker
-from strategy import CASH, Config
+import strategy
+from strategy import CASH
 
 NY = "America/New_York"
 US = MARKETS["US"]
-UNIVERSE = Config().us_universe  # AAPL, NVDA, MSFT, GOOGL, AMZN
+UNIVERSE = ("AAPL", "NVDA", "MSFT", "GOOGL", "AMZN")  # a 5-stock pool keeps the rank math readable
+
+
+def Config(**changes):
+    return strategy.Config(**{"us_universe": UNIVERSE} | changes)
 
 
 class FakeSource:

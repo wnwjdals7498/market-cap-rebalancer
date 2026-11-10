@@ -104,6 +104,9 @@ def test_typed_settings_validation(conn):
     bad({"kr_universe": ["5930.KS", "000660.KS", "402340.KS", "373220.KS", "005380.KS"]})
     bad({"kr_universe": ["005930.KS", "005930.KS", "402340.KS", "373220.KS", "005380.KS"]})
     bad({"us_universe": ["AAPL", "NVDA", "MSFT", "GOOGL"]})
+    bad({"pool_size": 4})
+    bad({"pool_size": 31})
+    bad({"pool_auto": 1})
     bad({"us_short_bond": "AAPL"})                        # overlaps the stock candidates
     bad({"us_short_bond": "TLT"})                         # same as the long bond
     bad({"us_short_bond": "shy"})
@@ -123,14 +126,40 @@ def test_system_and_migration_sources_are_allowed(conn):
         control.update(conn, {"config": {"fx_enabled": True}}, "other")
 
 
+def test_pool_list_length_validation(conn):
+    us = list(Config().us_universe)
+    assert len(us) == 15 and Config().pool_size == 15 and Config().pool_auto is True
+    assert control.LIMITS["pool_size"]["min"] == 5 and control.LIMITS["pool_size"]["max"] == 30
+    assert control.LIMITS["us_universe"]["min"] == 5 and control.LIMITS["kr_universe"]["max"] == 30
+
+    def bad(changes):
+        with pytest.raises(control.ControlError):
+            control.update(conn, {"config": changes}, "web")
+
+    bad({"us_universe": us[:4]})
+    bad({"us_universe": us + [f"X{i}" for i in range(16)]})         # 31 entries
+    bad({"kr_universe": list(Config().kr_universe[:4])})
+    bad({"kr_universe": list(Config().kr_universe[:4]) + ["005935.KS"]})  # preferred share
+    bad({"kr_universe": list(Config().kr_universe[:4]) + ["005930.KQ"]})
+    assert db.setting_changes(conn) == []
+
+    control.update(conn, {"config": {"us_universe": us[:5]}}, "web")  # 5 is the lower bound
+    control.update(conn, {"config": {"us_universe": us, "kr_universe": list(Config().kr_universe)}}, "web")
+    assert control.load_config(conn).us_universe == tuple(us)
+    assert control.update(conn, {"config": {"pool_size": 20, "pool_auto": False}}, "web")["config"][
+        "pool_size"] == 20
+    cfg = control.load_config(conn)
+    assert cfg.pool_size == 20 and cfg.pool_auto is False
+
+
 def test_universe_change_retires_removed_tickers(conn):
     us = list(Config().us_universe)
-    control.update(conn, {"config": {"us_universe": [t if t != "AMZN" else "META" for t in us]}}, "web")
+    control.update(conn, {"config": {"us_universe": [t if t != "AMZN" else "ORCL" for t in us]}}, "web")
     assert db.get_setting(conn, "retired")["US"] == {"AMZN": "stock"}
     control.update(conn, {"config": {"us_short_bond": "IEF"}}, "web")
     assert db.get_setting(conn, "retired")["US"] == {"AMZN": "stock", "SHY": "bond"}
-    control.update(conn, {"config": {"us_universe": us}}, "web")  # AMZN is back, META drops out
-    assert db.get_setting(conn, "retired")["US"] == {"SHY": "bond", "META": "stock"}
+    control.update(conn, {"config": {"us_universe": us}}, "web")  # AMZN is back, ORCL drops out
+    assert db.get_setting(conn, "retired")["US"] == {"SHY": "bond", "ORCL": "stock"}
 
 
 OLD_CONFIG = {"stock_pct": 60.0, "us_pct": 50.0, "fx_mode": "separate", "band_pp": 0.0, "step_pct": 10.0,
@@ -159,9 +188,10 @@ def test_migrate_old_config_once(conn, no_real_alerts):
     assert cfg.confirm_days == 0 and cfg.us_pct == 60
     assert not set(control.OLD_KEYS) & set(db.get_setting(conn, "config"))
     retired = db.get_setting(conn, "retired")
-    assert retired["US"] == {"IEF": "bond", "META": "stock", "AVGO": "stock", "TSLA": "stock"}
-    assert retired["KR"] == {"207940.KS": "stock", "148070.KS": "bond"}
-    assert cfg.kr_taxable == set(cfg.kr_universe) | {"207940.KS"}
+    # META, AVGO, TSLA and 207940.KS are in the new 15-stock default pool; GOOGL (now GOOG) is not
+    assert retired["US"] == {"IEF": "bond", "GOOGL": "stock"}
+    assert retired["KR"] == {"148070.KS": "bond"}
+    assert cfg.kr_taxable == set(cfg.kr_universe)
     log = db.setting_changes(conn)
     assert log and {r["source"] for r in log} == {"migration"}
     assert db.get_setting(conn, "config:version") == 2 and len(no_real_alerts) == 1

@@ -2,7 +2,7 @@
 
 자산을 두 '포켓'으로 나눔: US(달러) / KR(원화). 각 포켓에서:
 
-* 시장별 후보 주식 5종목을 시총 순으로 줄 세운다 (update_ranking: confirm_days 만큼 유지돼야 순위 변경 확정).
+* 시장별 후보 풀(pool_size 종목)을 시총 순으로 줄 세운다 (update_ranking: confirm_days 만큼 유지돼야 순위 변경 확정).
 * 주식 몫(stock_pct) 안에서 1~5위에 rank_weights 비율을 준다 (stock_weights). 데이터 없는 종목은
   순위에서 빠지고 남은 순위 비율을 다시 정규화한다.
 * 나머지 채권 몫은 short_bond_pct 로 단기채/장기채에 나눈다 (pocket_weights).
@@ -38,8 +38,16 @@ class Config:
     fx_band_pp: float = 5.0           # 미국 비중 환전 허용 오차 (%p)
     fx_enabled: bool = True          # 환전 계획 사용 여부
     fx_wait_days: int = 3             # 환전 대기 일수
-    us_universe: tuple[str, ...] = ("AAPL", "NVDA", "MSFT", "GOOGL", "AMZN")  # 미국 주식 후보
-    kr_universe: tuple[str, ...] = ("005930.KS", "000660.KS", "402340.KS", "373220.KS", "005380.KS")  # 한국 주식 후보
+    pool_size: int = 15               # 시장별 후보 풀 크기 (종목 수)
+    pool_auto: bool = True            # 후보 풀을 매주 자동 갱신 (끄면 수동 목록 유지)
+    # 후보 풀: screener.screen_top("US"/"KR", 15) 결과, 2026-11-10 11:28 KST 조회 (시총 순)
+    us_universe: tuple[str, ...] = (
+        "AAPL", "NVDA", "MSFT", "GOOG", "AMZN", "TSM", "SPCX", "META", "AVGO", "TSLA",
+        "LLY", "BRK-B", "WMT", "SKHY", "JPM")
+    kr_universe: tuple[str, ...] = (
+        "005930.KS", "000660.KS", "402340.KS", "373220.KS", "005380.KS", "207940.KS", "009150.KS",
+        "105560.KS", "068270.KS", "028260.KS", "032830.KS", "055550.KS", "000270.KS", "006400.KS",
+        "012450.KS")
     us_short_bond: str = "SHY"        # 미국 단기채
     us_long_bond: str = "TLT"         # 미국 장기채
     kr_short_bond: str = "114260.KS"  # 한국 단기채

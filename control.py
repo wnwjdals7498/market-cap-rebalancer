@@ -22,7 +22,8 @@ class ControlError(ValueError):
 TRADING_DEFAULTS = {"broker": "sim", "submit": False, "allow_real": False}
 PAUSED_DEFAULTS = {"KR": False, "US": False}
 US_TICKER = r"^[A-Z][A-Z.\-]{0,5}$"
-KR_TICKER = r"^\d{6}\.KS$"
+KR_TICKER = r"^\d{6}\.KS$"  # bonds/ETFs
+KR_STOCK = r"^\d{5}0\.KS$"  # KOSPI common stock
 SOURCES = ("web", "cli", "system", "migration")
 LIMITS: dict[str, dict[str, Any]] = {
     "stock_pct": {"type": "float", "label": "주식 비중 (%)", "min": 0, "max": 100},
@@ -39,8 +40,10 @@ LIMITS: dict[str, dict[str, Any]] = {
     "fx_band_pp": {"type": "float", "label": "환전 허용 오차 (%p)", "min": 0, "max": 50},
     "fx_enabled": {"type": "bool", "label": "환전 안내 사용"},
     "fx_wait_days": {"type": "int", "label": "환전 대기 일수", "min": 1, "max": 30},
-    "us_universe": {"type": "tickers", "label": "미국 주식 후보 (5종목)", "market": "US"},
-    "kr_universe": {"type": "tickers", "label": "한국 주식 후보 (5종목)", "market": "KR"},
+    "pool_size": {"type": "int", "label": "후보 풀 크기", "min": 5, "max": 30},
+    "pool_auto": {"type": "bool", "label": "후보 풀 매주 자동 갱신"},
+    "us_universe": {"type": "tickers", "label": "미국 후보 풀 (자동 갱신)", "market": "US", "min": 5, "max": 30},
+    "kr_universe": {"type": "tickers", "label": "한국 후보 풀 (자동 갱신)", "market": "KR", "min": 5, "max": 30},
     "us_short_bond": {"type": "ticker", "label": "미국 단기채", "market": "US"},
     "us_long_bond": {"type": "ticker", "label": "미국 장기채", "market": "US"},
     "kr_short_bond": {"type": "ticker", "label": "한국 단기채", "market": "KR"},
@@ -88,10 +91,13 @@ def validate_config(key: str, value):
         if abs(sum(value) - 100) > 1e-6:
             raise ControlError(f"{key} 의 합은 100이어야 합니다")
         return [float(w) for w in value]
-    pattern = US_TICKER if limit["market"] == "US" else KR_TICKER
+    if limit["market"] == "US":
+        pattern = US_TICKER
+    else:
+        pattern = KR_STOCK if kind == "tickers" else KR_TICKER
     names = value if kind == "tickers" else [value]
-    if kind == "tickers" and (not isinstance(value, list) or len(value) != RANK_SLOTS):
-        raise ControlError(f"{key} 는 종목 {RANK_SLOTS}개여야 합니다")
+    if kind == "tickers" and (not isinstance(value, list) or not limit["min"] <= len(value) <= limit["max"]):
+        raise ControlError(f"{key} 는 종목 {limit['min']}~{limit['max']}개여야 합니다")
     if not all(isinstance(t, str) and re.fullmatch(pattern, t) for t in names):
         raise ControlError(f"종목 코드 형식이 올바르지 않습니다: {key}")
     if len(set(names)) != len(names):
