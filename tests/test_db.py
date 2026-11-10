@@ -1,5 +1,5 @@
 import db
-from strategy import LeaderState
+from strategy import LeaderState, RankState
 
 
 def test_claim_run_is_idempotent(tmp_path):
@@ -44,3 +44,24 @@ def test_stale_running_run_can_be_reclaimed(tmp_path):
     assert db.claim_run(conn, "execute", "KR", "2026-11-03", now=t0 + timedelta(minutes=61))
     db.finish_run(conn, "execute", "KR", "2026-11-03", "PARTIAL")
     assert not db.claim_run(conn, "execute", "KR", "2026-11-03", now=t0 + timedelta(hours=5))
+
+
+def test_rank_state_roundtrip_uses_previous_session(tmp_path):
+    conn = db.connect(tmp_path / "t.db")
+    st = RankState(confirmed=["A", "B", "C"], pending=["B", "A", "C"], streak=2)
+    db.save_rank_state(conn, "2026-10-26", "US", st)
+    assert db.load_rank_state(conn, "US", "2026-10-27") == st
+    assert db.load_rank_state(conn, "US", "2026-10-26") == RankState()  # same-day re-run starts from prior day
+    assert db.load_rank_state(conn, "KR", "2026-10-27") == RankState()
+
+
+def test_last_trade_date_counts_only_ok_executes(tmp_path):
+    conn = db.connect(tmp_path / "t.db")
+    for day, status in (("2026-10-26", "OK"), ("2026-10-27", "SKIPPED"), ("2026-10-28", "FAILED")):
+        db.claim_run(conn, "execute", "US", day)
+        db.finish_run(conn, "execute", "US", day, status)
+    db.claim_run(conn, "signal", "US", "2026-10-29")
+    db.finish_run(conn, "signal", "US", "2026-10-29", "OK")
+    assert db.last_trade_date(conn, "US") == "2026-10-26"
+    assert db.last_trade_date(conn, "US", before="2026-10-26") is None
+    assert db.last_trade_date(conn, "KR") is None

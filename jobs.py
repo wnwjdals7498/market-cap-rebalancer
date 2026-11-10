@@ -19,13 +19,12 @@ import sqlite3
 import sys
 import time
 from dataclasses import asdict, fields, replace
-from datetime import time as dtime, timedelta
+from datetime import date as dt_date, time as dtime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-import data
 import db
 import control
 import notify
@@ -35,7 +34,8 @@ from brokers import Broker, SimBroker
 from execution import ExecParams, execute, limit_price
 from markets import MARKETS, Market, current_session, session_times
 from sources import FallbackSource, Quote, Source, YFinanceSource
-from strategy import CASH, Config, LeaderState, plan_targets, pocket_value, trade_cost, update_state
+from strategy import (CASH, Config, RankState, plan_moves, pocket_value, pocket_weights, stock_weights, trade_cost,
+                      trade_due, update_ranking)
 
 log = logging.getLogger("mcr")
 
@@ -44,21 +44,20 @@ SHARES_JUMP = 0.20                     # reject a new share count that moves mor
 MCAP_JUMP = 0.40                       # day-over-day market-cap move treated as bad data
 
 
+NO_TRADE = report.NO_TRADE  # execute detail on days outside the trade cadence (not worth an alert)
+
+
 class JobError(RuntimeError):
     pass
 
 
 def load_config(conn: sqlite3.Connection) -> Config:
     known = {f.name for f in fields(Config)} - {"kr_taxable"}
-    saved = {k: tuple(v) if isinstance(v, list) else v
+    saved: dict[str, Any] = {k: tuple(v) if isinstance(v, list) else v
              for k, v in db.get_setting(conn, "config", {}).items() if k in known}
     cfg = Config(**saved)
     retired = db.get_setting(conn, "retired", {}).get("KR", {})
     return replace(cfg, kr_taxable=frozenset(cfg.kr_universe) | {t for t, role in retired.items() if role == "stock"})
-
-
-def bond_of(mkt: Market, cfg: Config) -> str:
-    return cfg.us_bond if mkt.code == "US" else cfg.kr_bond
 
 
 def fresh_quotes(src: Source, tickers: list[str], session: str, tz: str, now: pd.Timestamp) -> dict[str, Quote]:
@@ -73,14 +72,14 @@ def fresh_quotes(src: Source, tickers: list[str], session: str, tz: str, now: pd
     return out
 
 
-def current_weights(state: LeaderState) -> dict[str, float]:
-    if state.mode == "SPLIT" and state.pair:
-        return {t: 0.5 for t in state.pair}
-    return {state.leader or state.holding: 1.0}
+def retired_of(conn: sqlite3.Connection, mkt: Market) -> dict[str, str]:
+    """Tickers dropped from the candidate/bond lists that are still being sold down: {ticker: stock|bond}."""
+    return db.get_setting(conn, "retired", {}).get(mkt.code, {})
 
 
-def refresh_shares(conn: sqlite3.Connection, mkt: Market, session: str, src: Source) -> dict[str, float]:
-    universe = list(mkt.universe)
+def refresh_shares(conn: sqlite3.Connection, mkt: Market, session: str, src: Source,
+                   cfg: Config) -> dict[str, float]:
+    universe = list(cfg.universe(mkt.code))
     known = db.latest_shares(conn, universe, before=session, source=src.name)
     if all(d == session for d, _ in known.values()) and len(known) == len(universe):
         return {t: s for t, (_, s) in known.items()}
@@ -118,33 +117,37 @@ def _guarded(job: str, conn: sqlite3.Connection, mkt: Market | str, session: str
     db.finish_run(conn, job, code, session, status, detail)
     log.info("%s %s %s %s: %s", job, code, session, status, detail)
     # alert on anything a human should look at: held-back signals, partial fills, and every trade
-    if job != "report" and (status in ("SKIPPED", "PARTIAL")
-                            or (job == "execute" and not detail.startswith("no orders"))):
+    if job != "report" and detail != NO_TRADE and (
+            status in ("SKIPPED", "PARTIAL") or (job == "execute" and not detail.startswith("no orders"))):
         notify.send(f"{'⚠️' if status != 'OK' else '✅'} {job} {code} {session} {status}: {detail}")
     return f"{job} {code} {session} {status}: {detail}"
 
 
 def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source, cfg: Config,
                now: pd.Timestamp, force: bool = False, broker: Broker | None = None) -> str:
-    """broker given: holdings come from the brokerage account (and are snapshotted); otherwise from SQLite."""
+    """broker given: holdings come from the brokerage account (and are snapshotted); otherwise from SQLite.
+    Every session ranks the candidates; only a session inside the trade cadence also plans targets."""
     def work():
         tz = session_times(mkt, session).open.tz
-        bond = bond_of(mkt, cfg)
-        units = managed(broker.balance(mkt.code), mkt, cfg) if broker else db.latest_positions(conn, mkt.code)[1]
+        universe, bonds = list(cfg.universe(mkt.code)), list(cfg.bonds(mkt.code))
+        retired = retired_of(conn, mkt)
+        units = managed(broker.balance(mkt.code) if broker else db.latest_positions(conn, mkt.code)[1],
+                        mkt, cfg, retired)
         if not units:
             raise JobError("no positions; run `jobs.py init` first")
-        held = [t for t in units if t != CASH and t not in mkt.universe and t != bond]
-        shares = refresh_shares(conn, mkt, session, src)
-        quotes = fresh_quotes(src, list(mkt.universe) + [bond] + held, session, str(tz), now)
-        if bond not in quotes:
-            raise JobError(f"no fresh quote for bond ETF {bond}")
+        held = [t for t in retired if units.get(t)]
+        shares = refresh_shares(conn, mkt, session, src, cfg)
+        quotes = fresh_quotes(src, universe + bonds + held, session, str(tz), now)
+        no_bond = [t for t in bonds if t not in quotes]
+        if no_bond:
+            raise JobError(f"no fresh quote for bond ETF {no_bond}")
 
         prev = db.previous_mcaps(conn, mkt.code, session)
         rows, valid, suspect = [], {}, []
-        for t in mkt.universe:
+        for t in universe:
             q = quotes.get(t)
             if q is None or t not in shares:
-                continue
+                continue  # no data (e.g. not listed yet): ranked without it, weights renormalize
             mcap = q.price * shares[t]
             flag = None
             if t in prev and abs(mcap / prev[t] - 1) > MCAP_JUMP:
@@ -154,25 +157,25 @@ def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source,
                 valid[t] = mcap
             rows.append({"ticker": t, "price": q.price, "quote_time": q.time.isoformat(), "shares": shares[t],
                          "mcap": mcap, "source": q.source or src.name, "flag": flag})
-        rows.append({"ticker": bond, "price": quotes[bond].price, "quote_time": quotes[bond].time.isoformat(),
-                     "source": quotes[bond].source or src.name})
+        rows += [{"ticker": t, "price": quotes[t].price, "quote_time": quotes[t].time.isoformat(),
+                  "source": quotes[t].source or src.name} for t in bonds + held]
         db.save_snapshot(conn, session, mkt.code, rows)
 
         ranked = sorted(valid.items(), key=lambda kv: kv[1], reverse=True)
         db.save_rankings(conn, session, mkt.code, ranked)
-        state = db.load_state(conn, mkt.code, session)
-        before = (state.mode, state.leader, tuple(state.pair))
+        state = db.load_rank_state(conn, mkt.code, session)
+        before = state.confirmed.copy()
         if suspect or len(ranked) < 2:
-            # bad or missing data: keep yesterday's ranking memory, only re-apply its weights
-            if state.leader is None:
+            # bad or missing data: keep yesterday's confirmed ranking
+            if not before:
                 raise JobError(f"not enough clean market caps on first run (suspect={suspect})")
-            weights, note = current_weights(state), f"HOLD (suspect={suspect}, ranked={len(ranked)})"
+            confirmed = [t for t in before if t in universe and t in quotes]
+            note = f"HOLD (suspect={suspect}, ranked={len(ranked)})"
         else:
-            weights, note = update_state(state, [t for t, _ in ranked], cfg), "OK"
-        db.save_state(conn, session, mkt.code, state)
-        if before[1] is not None and before != (state.mode, state.leader, tuple(state.pair)):
-            notify.send(f"🔄 {mkt.code} {session} 순위 변화: 1위 {before[1]} → {state.leader}, "
-                        f"모드 {before[0]} → {state.mode}, 목표 주식 {'/'.join(weights)}")
+            confirmed, note = update_ranking(state, [t for t, _ in ranked], cfg), "OK"
+        db.save_rank_state(conn, session, mkt.code, state)
+        if before and note == "OK" and before != confirmed:
+            notify.send(f"🔄 {mkt.code} {session} 순위 변화: {' > '.join(before)} → {' > '.join(confirmed)}")
 
         prices = {t: q.price for t, q in quotes.items()}
         missing = [t for t in units if t != CASH and t not in prices]
@@ -181,20 +184,36 @@ def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source,
         if broker:
             db.save_positions(conn, session, mkt.code, units, prices)
         value = pocket_value(units, prices)
-        target = plan_targets(units, prices, weights, bond, cfg, value)
-        db.save_targets(conn, session, mkt.code, {t: (v / value, prices[t]) for t, v in target.items()})
+        investable = value  # seam for the FX plan: cash to keep out of the market (Task 4)
 
         top = " > ".join(t for t, _ in ranked[:3])
-        tw = ", ".join(f"{t} {v / value:.1%}" for t, v in sorted(target.items(), key=lambda kv: -kv[1]))
-        return ("OK" if note == "OK" else "SKIPPED"), f"{note}; rank {top}; mode {state.mode}; target {tw}"
+        last = db.last_trade_date(conn, mkt.code, before=session)
+        if not trade_due(dt_date.fromisoformat(session), dt_date.fromisoformat(last) if last else None,
+                         cfg.trade_every):
+            db.save_targets(conn, session, mkt.code, {})  # a forced re-run must not leave an earlier plan behind
+            tail = f"no trade ({cfg.trade_every})"
+        else:
+            weights = pocket_weights(stock_weights(confirmed, cfg), mkt.code, cfg)
+            target = plan_moves(units, prices, weights, cfg, investable)
+            if value > 0:
+                db.save_targets(conn, session, mkt.code, {t: (v / value, prices[t]) for t, v in target.items()})
+                tail = "target " + ", ".join(f"{t} {v / value:.1%}"
+                                             for t, v in sorted(target.items(), key=lambda kv: -kv[1]))
+            else:
+                db.save_targets(conn, session, mkt.code, {})
+                tail = "target none (empty pocket)"
+        done = [t for t in retired if not units.get(t)]
+        if done:
+            control.drop_retired(conn, mkt.code, done)
+        return ("OK" if note == "OK" else "SKIPPED"), f"{note}; rank {top}; {tail}"
 
     return _guarded("signal", conn, mkt, session, force, work)
 
 
-def managed(units: dict[str, float], mkt: Market, cfg: Config) -> dict[str, float]:
-    """Holdings this strategy may trade: its universe, the bond ETF and cash. Anything else in the
-    account (the user's own positions) is left untouched."""
-    keep = set(mkt.universe) | {bond_of(mkt, cfg), CASH}
+def managed(units: dict[str, float], mkt: Market, cfg: Config, retired: dict[str, str]) -> dict[str, float]:
+    """Holdings this strategy may trade: candidates, the two bond ETFs, tickers being retired and cash.
+    Anything else in the account (the user's own positions) is left untouched."""
+    keep = set(cfg.universe(mkt.code)) | set(cfg.bonds(mkt.code)) | set(retired) | {CASH}
     other = sorted(t for t, q in units.items() if t not in keep and q)
     if other:
         log.warning("%s: ignoring holdings outside the strategy: %s", mkt.code, other)
@@ -224,7 +243,11 @@ def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source
         if db.run_status(conn, "signal", mkt.code, session) not in ("OK", "SKIPPED"):
             raise JobError("signal has not completed for this session")
         targets = db.load_targets(conn, session, mkt.code)
-        units = managed(broker.balance(mkt.code), mkt, cfg) if broker else db.latest_positions(conn, mkt.code)[1]
+        if not targets:
+            return "SKIPPED", NO_TRADE
+        retired = retired_of(conn, mkt)
+        units = managed(broker.balance(mkt.code) if broker else db.latest_positions(conn, mkt.code)[1],
+                        mkt, cfg, retired)
         tickers = sorted((set(targets) | set(units)) - {CASH})
         tz = str(session_times(mkt, session).open.tz)
         quotes = fresh_quotes(src, tickers, session, tz, now)
@@ -233,19 +256,19 @@ def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source
             raise JobError(f"no fresh quote for {missing}")
         prices = {t: q.price for t, q in quotes.items()}
         plan = plan_orders(targets, units, prices, cfg)
-        bond = bond_of(mkt, cfg)
+        etfs = set(cfg.bonds(mkt.code)) | {t for t, role in retired.items() if role == "bond"}
 
         if dry_run:
             for t, delta in plan:
                 side = "BUY" if delta > 0 else "SELL"
                 db.save_order(conn, {"session_date": session, "market": mkt.code, "ticker": t, "side": side,
                                      "step": 0, "qty": abs(delta), "ref_price": prices[t],
-                                     "limit_price": limit_price(prices[t], 0.0, mkt.code, side, t == bond),
+                                     "limit_price": limit_price(prices[t], 0.0, mkt.code, side, t in etfs),
                                      "status": "PLANNED"})
             return "OK", "DRY_RUN " + ("; ".join(f"{t} {d:+d}@{prices[t]:,.2f}" for t, d in plan) or "no orders")
 
         b = broker or SimBroker({mkt.code: units}, prices, cfg)
-        results = execute(b, mkt.code, plan, prices, etfs={bond}, params=params, sleep=sleep)
+        results = execute(b, mkt.code, plan, prices, etfs=etfs, params=params, sleep=sleep)
         for r in results:
             for o in r.orders:
                 fill_px = o["fill_price"] or o["limit_price"]
@@ -257,7 +280,7 @@ def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source
                                      "status": o["status"],
                                      "cost": trade_cost(cfg, mkt.code, r.ticker, signed * fill_px),
                                      "broker_order_no": o["broker_order_no"]})
-        new_units = managed(b.balance(mkt.code), mkt, cfg)
+        new_units = managed(b.balance(mkt.code), mkt, cfg, retired)
         db.save_positions(conn, session, mkt.code, new_units, prices)
         fills = "; ".join(f"{r.side} {r.ticker} {r.filled}/{r.wanted}@{r.avg_price or 0:,.2f}" for r in results)
         # buys capped by cash (fees above the model, fills up the ladder) are expected, not a failure
@@ -331,7 +354,7 @@ def tick(conn: sqlite3.Connection, src: Source, cfg: Config, now: pd.Timestamp,
             if now >= s.signal and db.run_status(conn, "signal", mkt.code, s.session) not in ("OK", "SKIPPED"):
                 out.append(run_signal(conn, mkt, s.session, src, cfg, now, broker=broker))
             if now >= s.execute and now < s.close - timedelta(minutes=15) \
-                    and db.run_status(conn, "execute", mkt.code, s.session) not in ("OK", "PARTIAL"):
+                    and db.run_status(conn, "execute", mkt.code, s.session) not in ("OK", "PARTIAL", "SKIPPED"):
                 out.append(run_execute(conn, mkt, s.session, src, cfg, now, broker=broker, dry_run=dry_run))
         except Exception as e:  # keep the other market going
             out.append(f"{mkt.code} {s.session} FAILED: {e!r}")

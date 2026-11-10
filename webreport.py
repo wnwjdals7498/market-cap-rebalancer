@@ -7,7 +7,6 @@ import sqlite3
 from datetime import datetime, timezone
 
 import report
-from markets import MARKETS
 from report import name
 
 # Categorical slots (reference palette, light / dark). A ticker keeps its slot via its universe position,
@@ -179,7 +178,9 @@ def _won_axis(v: float) -> str:
 
 
 def market_card(conn: sqlite3.Connection, market: str) -> str:
-    universe = list(MARKETS[market].universe)
+    from jobs import load_config  # local: jobs imports this module
+
+    universe = list(load_config(conn).universe(market))
     slot = {t: i for i, t in enumerate(universe)}
     lines, value, warns = report.market_section(conn, market)
     head = esc(lines[0].split(" ", 1)[1])  # drop the flag emoji: Windows renders it as two letters

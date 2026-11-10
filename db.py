@@ -7,7 +7,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from strategy import LeaderState
+from strategy import LeaderState, RankState
 
 DEFAULT_DB = Path(__file__).parent / "mcr.db"
 # A RUNNING row older than this belongs to a process that died (PC slept, task killed). Longer than
@@ -65,6 +65,14 @@ CREATE TABLE IF NOT EXISTS leader_state (
     candidate    TEXT,
     cand_streak  INTEGER NOT NULL,
     switches     INTEGER NOT NULL,
+    PRIMARY KEY (session_date, market)
+);
+CREATE TABLE IF NOT EXISTS rank_state (
+    session_date TEXT NOT NULL,
+    market       TEXT NOT NULL,
+    confirmed    TEXT NOT NULL,         -- JSON list, best first
+    pending      TEXT NOT NULL,         -- JSON list
+    streak       INTEGER NOT NULL,
     PRIMARY KEY (session_date, market)
 );
 CREATE TABLE IF NOT EXISTS targets (    -- weights within the market pocket
@@ -260,6 +268,31 @@ def save_state(conn: sqlite3.Connection, session_date: str, market: str, state: 
         conn.execute("INSERT OR REPLACE INTO leader_state VALUES (:session_date, :market, :mode, :holding, "
                      ":leader, :streak, :pair, :candidate, :cand_streak, :switches)",
                      {"session_date": session_date, "market": market, **s})
+
+
+# --- rank state -------------------------------------------------------------
+
+def load_rank_state(conn: sqlite3.Connection, market: str, before: str) -> RankState:
+    """Ranking memory after the last session strictly before `before` (empty state if none)."""
+    row = conn.execute("SELECT * FROM rank_state WHERE market = ? AND session_date < ? "
+                       "ORDER BY session_date DESC LIMIT 1", (market, before)).fetchone()
+    if not row:
+        return RankState()
+    return RankState(confirmed=json.loads(row["confirmed"]), pending=json.loads(row["pending"]),
+                     streak=row["streak"])
+
+
+def save_rank_state(conn: sqlite3.Connection, session_date: str, market: str, state: RankState) -> None:
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO rank_state VALUES (?, ?, ?, ?, ?)",
+                     (session_date, market, json.dumps(state.confirmed), json.dumps(state.pending), state.streak))
+
+
+def last_trade_date(conn: sqlite3.Connection, market: str, before: str | None = None) -> str | None:
+    """Latest session whose execute finished OK (strictly before `before` when given)."""
+    row = conn.execute("SELECT MAX(session_date) FROM runs WHERE job = 'execute' AND market = ? AND status = 'OK' "
+                       "AND (? IS NULL OR session_date < ?)", (market, before, before)).fetchone()
+    return row[0]
 
 
 # --- targets / positions / orders ------------------------------------------

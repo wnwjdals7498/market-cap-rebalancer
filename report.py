@@ -8,7 +8,11 @@ from collections import defaultdict
 import pandas as pd
 
 NAMES = {"005930.KS": "삼성전자", "000660.KS": "SK하이닉스", "373220.KS": "LG에너지솔루션",
-         "207940.KS": "삼성바이오로직스", "005380.KS": "현대차", "148070.KS": "국고채10년"}
+         "207940.KS": "삼성바이오로직스", "005380.KS": "현대차", "148070.KS": "국고채10년",
+         "402340.KS": "SK스퀘어", "114260.KS": "국고채3년", "385560.KS": "국고채30년",
+         "SHY": "SHY(단기채)", "TLT": "TLT(장기채)"}
+EVERY = {"day": "일간", "week": "주간", "month": "월간"}
+NO_TRADE = "매매 주기 아님"  # execute detail on days outside the trade cadence; not a warning
 FLAGS = {"KR": "🇰🇷", "US": "🇺🇸"}
 WEEKDAYS = "월화수목금토일"
 
@@ -47,13 +51,15 @@ def market_section(conn: sqlite3.Connection, market: str) -> tuple[list[str], fl
     value = sum(r["value"] for r in pos)
 
     head = f"{FLAGS[market]} {market} {pos_date}"
-    st = conn.execute("SELECT * FROM leader_state WHERE market = ? ORDER BY session_date DESC LIMIT 1",
+    from jobs import load_config  # local: jobs imports this module
+
+    st = conn.execute("SELECT * FROM rank_state WHERE market = ? ORDER BY session_date DESC LIMIT 1",
                       (market,)).fetchone()
     if st:
-        pair = json.loads(st["pair"])
-        who = (f"1위 {name(st['leader'])} {st['streak']}일째" if st["mode"] == "SOLO"
-               else f"{name(pair[0])} / {name(pair[1])}")
-        head += f" | {st['mode']} | {who}"
+        cfg = load_config(conn)
+        ranking = " > ".join(name(t) for t in json.loads(st["confirmed"])[:3])
+        head += (f" | 순위 {ranking} | 다음 매매 {EVERY.get(cfg.trade_every, cfg.trade_every)}"
+                 f" | 대기 {st['streak']}/{cfg.confirm_days}일")
     lines = [head, f"  평가 {money(value, market)}"]
 
     tgt_session = _latest(conn, "targets", market)
@@ -102,8 +108,8 @@ def market_section(conn: sqlite3.Connection, market: str) -> tuple[list[str], fl
 
     warns = [f"{market} {r['job']} {r['session_date']} {r['status']}: {(r['detail'] or '')[:120]}"
              for r in conn.execute("SELECT * FROM runs WHERE market = ? AND status IN ('FAILED','SKIPPED','PARTIAL',"
-                                   "'RUNNING') AND session_date >= ? ORDER BY session_date, job",
-                                   (market, pos_date))]
+                                   "'RUNNING') AND session_date >= ? AND COALESCE(detail, '') != ? ORDER BY session_date, job",
+                                   (market, pos_date, NO_TRADE))]
     return lines, value, warns
 
 

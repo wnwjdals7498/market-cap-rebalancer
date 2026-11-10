@@ -130,6 +130,21 @@ def retire_removed(conn: sqlite3.Connection, before: dict, after: dict) -> None:
         conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", ("retired", json.dumps(retired)))
 
 
+def drop_retired(conn: sqlite3.Connection, market: str, tickers: list[str], source: str = "system") -> None:
+    """Remove fully sold tickers from the retired list of one market."""
+    with conn:
+        conn.execute("BEGIN IMMEDIATE")
+        retired = db.get_setting(conn, "retired", {})
+        current = retired.get(market, {})
+        left = {t: role for t, role in current.items() if t not in tickers}
+        if left == current:
+            return
+        retired[market] = left
+        conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", ("retired", json.dumps(retired)))
+        db.log_setting_change(conn, f"retired.{market}", current, left, source)
+    notify.send(f"🧹 {market} 정리 완료: " + ", ".join(sorted(set(current) - set(left))))
+
+
 def trading_settings(conn: sqlite3.Connection) -> dict:
     return TRADING_DEFAULTS | db.get_setting(conn, "trading", {})
 

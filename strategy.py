@@ -26,7 +26,7 @@ class Config:
     fx_mode: str = "separate"         # separate: 달러/원화 각자 리밸런싱, combined: 환전해서 us_pct 까지 맞춤
     band_pp: float = 0.0              # 주식/채권 비중 허용 오차 (%p). 0 이면 매일 정확히 맞춤
     step_pct: float = 10.0            # 1위 교체 시 하루 최대 이동량 (포켓 자산 대비 %)
-    confirm_days: int = 3             # 신 1위가 이 일수 연속 유지되면 1위/2위 반반(SPLIT)
+    confirm_days: int = 0             # 순위 변경을 확정하기까지 대기하는 거래일 수
     pair_confirm_days: int = 3        # SPLIT 에서 보유 2종목 밖 종목이 이 일수 연속 top2 면 교체. 0 = 즉시
     solo_after_days: int = 0          # SPLIT 에서 같은 1위가 이 일수 유지되면 다시 1위 단독. 0 = 복귀 안함
     us_bond: str = "IEF"              # 미국 7-10년 국채 ETF
