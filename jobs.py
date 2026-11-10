@@ -18,7 +18,7 @@ import math
 import sqlite3
 import sys
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import date as dt_date, time as dtime, timedelta
 from pathlib import Path
 from typing import Any
@@ -29,6 +29,7 @@ import db
 import control
 import notify
 import report
+import screener
 import webreport
 from brokers import Broker, SimBroker
 from control import FX_PLAN, load_config
@@ -88,6 +89,41 @@ def refresh_shares(conn: sqlite3.Connection, mkt: Market, session: str, src: Sou
     return accepted
 
 
+def iso_week(day: str) -> tuple[int, int]:
+    return dt_date.fromisoformat(day).isocalendar()[:2]
+
+
+def refresh_pool(conn: sqlite3.Connection, mkt: Market, session: str, cfg: Config,
+                 screen=screener.screen_top) -> Config:
+    """Replace the market's candidate pool with a fresh market-cap screen, once per ISO week of `session`.
+    The pool is the `<market>_universe` setting, so the change goes through `control.update` (history, alert,
+    dropped holdings become `retired`). A failed or short screen keeps the old pool and alerts once a week."""
+    if not cfg.pool_auto:
+        return cfg
+    code, week = mkt.code, iso_week(session)
+    refreshed = db.get_setting(conn, "pool:refreshed", {})
+    if code in refreshed and iso_week(refreshed[code]) == week:
+        return cfg
+    key = f"{code.lower()}_universe"
+    try:
+        new = list(screen(code, cfg.pool_size))
+        if set(new) == set(cfg.universe(code)):
+            changed = None
+        else:
+            control.update(conn, {"config": {key: new}}, "system")
+            loaded = load_config(conn)  # also refreshes the KR sell-tax set
+            changed = replace(cfg, **{key: getattr(loaded, key)}, kr_taxable=loaded.kr_taxable)
+    except Exception as e:  # screener, validation, or storage: the daily routine must go on with the old pool
+        log.warning("%s pool refresh failed: %r", code, e)
+        failed = db.get_setting(conn, "pool:failed", {})
+        if code not in failed or iso_week(failed[code]) != week:
+            notify.send(f"⚠️ {code} 후보 풀 갱신 실패, 이전 풀 유지: {e}")
+            db.set_setting(conn, "pool:failed", failed | {code: session})
+        return cfg
+    db.set_setting(conn, "pool:refreshed", refreshed | {code: session})
+    return changed or cfg
+
+
 def _guarded(job: str, conn: sqlite3.Connection, mkt: Market | str, session: str, force: bool, fn) -> str:
     code = mkt if isinstance(mkt, str) else mkt.code
     last = conn.execute("SELECT status, detail FROM runs WHERE job = ? AND market = ? AND session_date = ?",
@@ -116,10 +152,14 @@ def _guarded(job: str, conn: sqlite3.Connection, mkt: Market | str, session: str
 
 
 def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source, cfg: Config,
-               now: pd.Timestamp, force: bool = False, broker: Broker | None = None) -> str:
+               now: pd.Timestamp, force: bool = False, broker: Broker | None = None,
+               screen=screener.screen_top) -> str:
     """broker given: holdings come from the brokerage account (and are snapshotted); otherwise from SQLite.
-    Every session ranks the candidates; only a session inside the trade cadence also plans targets."""
+    The candidate pool is refreshed first (weekly). Every session ranks the pool; only a session inside the
+    trade cadence also plans targets."""
     def work():
+        nonlocal cfg
+        cfg = refresh_pool(conn, mkt, session, cfg, screen)
         tz = session_times(mkt, session).open.tz
         universe, bonds = list(cfg.universe(mkt.code)), list(cfg.bonds(mkt.code))
         retired = retired_of(conn, mkt)
@@ -135,12 +175,13 @@ def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source,
             raise JobError(f"no fresh quote for bond ETF {no_bond}")
 
         prev = db.previous_mcaps(conn, mkt.code, session)
-        rows, valid, suspect = [], {}, []
+        rows, valid, suspect, mcaps = [], {}, [], {}
         for t in universe:
             q = quotes.get(t)
             if q is None or t not in shares:
                 continue  # no data (e.g. not listed yet): ranked without it, weights renormalize
             mcap = q.price * shares[t]
+            mcaps[t] = mcap
             flag = None
             if t in prev and abs(mcap / prev[t] - 1) > MCAP_JUMP:
                 flag = f"mcap jump {prev[t]:.3g} -> {mcap:.3g}"
@@ -157,6 +198,17 @@ def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source,
         db.save_rankings(conn, session, mkt.code, ranked)
         state = db.load_rank_state(conn, mkt.code, session)
         before = state.confirmed.copy()
+        dropped: list[str] = []
+        if suspect and len(ranked) >= 2:
+            # The data checks (MCAP_JUMP etc.) are unchanged; only their scope. With a pool larger than the
+            # ranked slots, one bad value outside the top ranks must not freeze the whole day. A suspect ticker
+            # still means HOLD when it was in yesterday's confirmed top ranks, or its suspect value would put it
+            # in today's top ranks (it could move real orders either way). Otherwise only that ticker is left out.
+            top_n = len(cfg.rank_weights)
+            today_top = sorted(mcaps, key=lambda t: mcaps[t], reverse=True)[:top_n]
+            if not set(suspect) & (set(before[:top_n]) | set(today_top)):
+                dropped, suspect = suspect, []
+                log.warning("%s %s: dropping suspect %s from today's ranking", mkt.code, session, dropped)
         if suspect or len(ranked) < 2:
             # bad or missing data: keep yesterday's confirmed ranking
             if not before:
@@ -204,7 +256,8 @@ def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source,
         done = [t for t in retired if not units.get(t)]
         if done:
             control.drop_retired(conn, mkt.code, done)
-        return ("OK" if note == "OK" else "SKIPPED"), f"{note}; rank {top}; {tail}"
+        dropped_note = f"; dropped suspect {dropped}" if dropped else ""
+        return ("OK" if note == "OK" else "SKIPPED"), f"{note}; rank {top}; {tail}{dropped_note}"
 
     return _guarded("signal", conn, mkt, session, force, work)
 
@@ -426,7 +479,8 @@ def run_report(conn: sqlite3.Connection, now: pd.Timestamp, fx=report.fetch_usdk
 
 
 def tick(conn: sqlite3.Connection, src: Source, cfg: Config, now: pd.Timestamp,
-         broker: Broker | None = None, dry_run: bool = False, fx=report.fetch_usdkrw) -> list[str]:
+         broker: Broker | None = None, dry_run: bool = False, fx=report.fetch_usdkrw,
+         screen=screener.screen_top) -> list[str]:
     """Run whatever is due now. Safe to call every few minutes; runs table prevents repeats."""
     out = []
     paused = control.paused(conn)
@@ -439,7 +493,10 @@ def tick(conn: sqlite3.Connection, src: Source, cfg: Config, now: pd.Timestamp,
             continue
         try:
             if now >= s.signal and db.run_status(conn, "signal", mkt.code, s.session) not in ("OK", "SKIPPED"):
-                out.append(run_signal(conn, mkt, s.session, src, cfg, now, broker=broker))
+                pool = db.get_setting(conn, "pool:refreshed", {}).get(mkt.code)
+                out.append(run_signal(conn, mkt, s.session, src, cfg, now, broker=broker, screen=screen))
+                if db.get_setting(conn, "pool:refreshed", {}).get(mkt.code) != pool:
+                    cfg = load_config(conn)  # the pool was just refreshed: execute must manage the new candidates
             if now >= s.execute and now < s.close - timedelta(minutes=15) \
                     and db.run_status(conn, "execute", mkt.code, s.session) not in ("OK", "PARTIAL", "SKIPPED"):
                 out.append(run_execute(conn, mkt, s.session, src, cfg, now, broker=broker, dry_run=dry_run))

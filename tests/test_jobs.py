@@ -10,6 +10,7 @@ from markets import MARKETS
 from sources import Quote
 from brokers import SimBroker
 import strategy
+from screener import ScreenError
 from strategy import CASH
 
 NY = "America/New_York"
@@ -18,7 +19,8 @@ UNIVERSE = ("AAPL", "NVDA", "MSFT", "GOOGL", "AMZN")  # a 5-stock pool keeps the
 
 
 def Config(**changes):
-    return strategy.Config(**{"us_universe": UNIVERSE} | changes)
+    """Test config: 5-stock pool, no weekly pool search (tests never reach the network)."""
+    return strategy.Config(**{"us_universe": UNIVERSE, "pool_auto": False} | changes)
 
 
 class FakeSource:
@@ -726,3 +728,155 @@ def test_execute_drops_targets_the_strategy_no_longer_manages(env):
     with pytest.raises(jobs.JobError, match="no managed ticker"):  # never sell everything for lack of targets
         jobs.run_execute(conn, US, "2026-10-27", src, cfg, pd.Timestamp("2026-10-27 12:50", tz=NY), broker=acct,
                          dry_run=True)
+
+
+# --- weekly candidate pool ---------------------------------------------------------------------------
+
+EXTRA = ("ORCL", "TSLA")  # pool members outside the five-stock UNIVERSE
+
+
+class FakeScreen:
+    def __init__(self, result):
+        self.result, self.calls = result, []
+
+    def __call__(self, market, size):
+        self.calls.append((market, size))
+        if isinstance(self.result, Exception):
+            raise self.result
+        return list(self.result)
+
+
+def set_pool_day(src, day, mcaps, extra=EXTRA, prices=None):
+    """set_day plus the extra pool members (billions, price 100); `prices` moves a price, not the share count
+    (a share-count jump is rejected by its own check)."""
+    set_day(src, day, mcaps)
+    for t in extra:
+        src.prices[t] = 100.0
+        src.shares_out[t] = mcaps.get(t, 1.0) * 1e9 / 100
+    src.prices |= prices or {}
+
+
+def pool_env(tmp_path, pool, **cfg_changes):
+    """A US-only account whose stored pool and strategy Config both start as `pool`."""
+    conn = db.connect(tmp_path / "p.db")
+    db.save_positions(conn, "2026-10-26", "US", {CASH: 100_000.0}, {})
+    db.save_positions(conn, "2026-10-26", "KR", {CASH: 0.0}, {})
+    db.set_setting(conn, "config", {"fx_enabled": False, "us_universe": list(pool)})
+    cfg = Config(us_fee=0, trade_every="day", fx_enabled=False, us_universe=tuple(pool),
+                 pool_size=len(pool), **{"pool_auto": True} | cfg_changes)
+    return conn, FakeSource(), cfg
+
+
+def signal(conn, src, cfg, day, screen):
+    src.quote_time = pd.Timestamp(f"{day} 11:40", tz=NY)
+    return jobs.run_signal(conn, US, day, src, cfg, pd.Timestamp(f"{day} 11:50", tz=NY), screen=screen)
+
+
+def test_weekly_pool_refresh_once_per_week(tmp_path):
+    conn, src, cfg = pool_env(tmp_path, UNIVERSE)
+    new = ("AAPL", "NVDA", "MSFT", "GOOGL", "TSLA")
+    screen = FakeScreen(new)
+    set_pool_day(src, "2026-10-26", {"AAPL": 5000, "TSLA": 4000})
+    assert " OK" in signal(conn, src, cfg, "2026-10-26", screen)
+    assert screen.calls == [("US", 5)]
+    assert db.get_setting(conn, "config")["us_universe"] == list(new)
+    assert db.get_setting(conn, "pool:refreshed") == {"US": "2026-10-26"}
+    log = {r["key"]: r["source"] for r in db.setting_changes(conn)}
+    assert log["config.us_universe"] == "system" and log["retired.US"] == "system"  # AMZN left the pool
+
+    logged = len(db.setting_changes(conn))
+    set_pool_day(src, "2026-10-27", {"AAPL": 5000, "TSLA": 4000})
+    signal(conn, src, replace(cfg, us_universe=new), "2026-10-27", screen)  # same ISO week: no search
+    assert len(screen.calls) == 1
+    set_pool_day(src, "2026-11-02", {"AAPL": 5000, "TSLA": 4000})
+    signal(conn, src, replace(cfg, us_universe=new), "2026-11-02", screen)  # next week
+    assert len(screen.calls) == 2 and db.get_setting(conn, "pool:refreshed") == {"US": "2026-11-02"}
+    assert len(db.setting_changes(conn)) == logged  # an unchanged pool writes nothing
+
+
+def test_pool_refresh_failure_keeps_old_pool_and_alerts_once(tmp_path, no_real_alerts):
+    conn, src, cfg = pool_env(tmp_path, UNIVERSE)
+    boom = FakeScreen(ScreenError("yahoo down"))
+    for day in ("2026-10-26", "2026-10-27"):
+        set_pool_day(src, day, {"AAPL": 5000})
+        assert " OK" in signal(conn, src, cfg, day, boom)  # the signal goes on with the old pool
+    assert len(boom.calls) == 2  # not refreshed, so each session retries
+    assert db.get_setting(conn, "config")["us_universe"] == list(UNIVERSE)
+    assert db.get_setting(conn, "pool:refreshed") is None and db.setting_changes(conn) == []
+    assert [m for m in no_real_alerts if "후보 풀" in m and "yahoo down" in m] != [] and \
+        len([m for m in no_real_alerts if "후보 풀 갱신 실패" in m]) == 1  # once that week
+    set_pool_day(src, "2026-11-02", {"AAPL": 5000})
+    signal(conn, src, cfg, "2026-11-02", boom)
+    assert len([m for m in no_real_alerts if "후보 풀 갱신 실패" in m]) == 2  # a new week alerts again
+
+    short = FakeScreen(("AAPL", "NVDA"))  # invalid list (too short for the setting) fails the same way
+    set_pool_day(src, "2026-11-09", {"AAPL": 5000})
+    assert " OK" in signal(conn, src, cfg, "2026-11-09", short)
+    assert db.get_setting(conn, "config")["us_universe"] == list(UNIVERSE)
+
+
+def test_pool_refresh_retires_dropped_holding(tmp_path, no_real_alerts):
+    conn, src, cfg = pool_env(tmp_path, UNIVERSE, step_pct=100)
+    db.save_positions(conn, "2026-10-26", "US", {CASH: 50_000.0, "AMZN": 500.0}, {"AMZN": 100.0})
+    screen = FakeScreen(("AAPL", "NVDA", "MSFT", "GOOGL", "TSLA"))  # AMZN fell out of the pool
+    set_pool_day(src, "2026-10-26", {"AAPL": 5000, "NVDA": 4900, "TSLA": 4700})
+    assert " OK" in signal(conn, src, cfg, "2026-10-26", screen)
+    assert db.get_setting(conn, "retired")["US"] == {"AMZN": "stock"}
+    targets = db.load_targets(conn, "2026-10-26", "US")
+    assert set(targets) == {"AAPL", "NVDA", "TSLA", "SHY"}  # AMZN is sold down, not rebought
+    assert any("us_universe" in m for m in no_real_alerts)
+
+
+def test_pool_auto_off_keeps_manual_list(tmp_path):
+    conn, src, cfg = pool_env(tmp_path, UNIVERSE, pool_auto=False)
+    screen = FakeScreen(("AAPL", "NVDA", "MSFT", "GOOGL", "TSLA"))
+    set_pool_day(src, "2026-10-26", {"AAPL": 5000})
+    assert " OK" in signal(conn, src, cfg, "2026-10-26", screen)
+    assert screen.calls == [] and db.get_setting(conn, "config")["us_universe"] == list(UNIVERSE)
+    assert db.get_setting(conn, "pool:refreshed") is None
+
+
+def test_tick_executes_with_the_refreshed_pool(tmp_path):
+    conn, src, cfg = pool_env(tmp_path, UNIVERSE, step_pct=100)
+    screen = FakeScreen(("AAPL", "NVDA", "MSFT", "GOOGL", "TSLA"))
+    set_pool_day(src, "2026-10-27", {"AAPL": 5000, "NVDA": 4900, "TSLA": 4800})
+    src.quote_time = pd.Timestamp("2026-10-27 12:45", tz=NY)
+    out = jobs.tick(conn, src, cfg, pd.Timestamp("2026-10-27 12:50", tz=NY), screen=screen, fx=lambda: 1400.0)
+    assert any(o.startswith("signal US 2026-10-27 OK") for o in out)
+    assert any(o.startswith("execute US 2026-10-27 OK") for o in out)  # the stale Config would drop TSLA's target
+    assert db.latest_positions(conn, "US")[1].get("TSLA", 0) > 0
+
+
+def pool_days(tmp_path, pool=UNIVERSE + EXTRA[:2]):
+    """Seven pool stocks, ranked AAPL > NVDA > MSFT > GOOGL > AMZN > ORCL > TSLA, one clean day recorded."""
+    conn, src, cfg = pool_env(tmp_path, pool, pool_auto=False)
+    day1 = {"AAPL": 5000, "NVDA": 4900, "MSFT": 4800, "GOOGL": 4700, "AMZN": 4600, "ORCL": 100, "TSLA": 90}
+    set_pool_day(src, "2026-10-26", day1)
+    assert " OK" in signal(conn, src, cfg, "2026-10-26", None)
+    return conn, src, cfg, day1
+
+
+def test_suspect_outside_top5_is_dropped_not_held(tmp_path):
+    conn, src, cfg, day1 = pool_days(tmp_path)
+    set_pool_day(src, "2026-10-27", day1, prices={"TSLA": 200.0})  # +122% but still rank 7
+    out = signal(conn, src, cfg, "2026-10-27", None)
+    assert " OK" in out and "HOLD" not in out and "dropped suspect ['TSLA']" in out
+    state = db.load_rank_state(conn, "US", "2026-10-28")  # memory after the 27th
+    assert state.confirmed == ["AAPL", "NVDA", "MSFT", "GOOGL", "AMZN", "ORCL"]  # TSLA left out for the day
+    assert db.load_targets(conn, "2026-10-27", "US")  # trading continues
+    flags = {r["ticker"]: r["flag"] for r in conn.execute(
+        "SELECT ticker, flag FROM snapshots WHERE session_date = '2026-10-27' AND market = 'US'")}
+    assert flags["TSLA"].startswith("mcap jump")
+
+
+@pytest.mark.parametrize("ticker, price", [
+    ("AMZN", 1.0),       # yesterday's rank 5 collapses
+    ("AMZN", 200.0),     # yesterday's rank 5 doubles
+    ("TSLA", 5200.0),    # a rank-7 stock whose bad value would put it in today's top five
+])
+def test_suspect_in_top5_still_holds(tmp_path, ticker, price):
+    conn, src, cfg, day1 = pool_days(tmp_path)
+    set_pool_day(src, "2026-10-27", day1, prices={ticker: price})
+    out = signal(conn, src, cfg, "2026-10-27", None)
+    assert out.startswith("signal US 2026-10-27 SKIPPED") and f"HOLD (suspect=['{ticker}']" in out
+    assert db.load_rank_state(conn, "US", "2026-10-28").confirmed[:5] == ["AAPL", "NVDA", "MSFT", "GOOGL", "AMZN"]
