@@ -325,3 +325,13 @@ def test_web_serve_names_the_address_it_cannot_listen_on():
     # 127.0.0.1 binds (listed twice = one socket); 192.0.2.1 (TEST-NET-1) is never an address of this machine
     with pytest.raises(SystemExit, match=r"cannot listen on 192\.0\.2\.1:0 .*is this address up"):
         jobs.serve_web(object(), ["127.0.0.1", "127.0.0.1", "192.0.2.1"], 0)
+
+
+def test_load_config_converts_lists_and_ignores_unknown_keys(tmp_path):
+    conn = db.connect(tmp_path / "l.db")
+    db.set_setting(conn, "config", {"rank_weights": [40, 30, 20, 5, 5], "kr_universe": ["000660.KS"] * 5,
+                                    "kr_taxable": ["x"], "removed_key": 1})
+    db.set_setting(conn, "retired", {"KR": {"207940.KS": "stock", "148070.KS": "bond"}, "US": {"IEF": "bond"}})
+    cfg = jobs.load_config(conn)
+    assert cfg.rank_weights == (40, 30, 20, 5, 5) and cfg.kr_universe == ("000660.KS",) * 5
+    assert cfg.kr_taxable == {"000660.KS", "207940.KS"}

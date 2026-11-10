@@ -39,9 +39,12 @@ class Paused(BaseModel):
 
 
 class Limit(BaseModel):
-    type: Literal["int", "float"]
-    min: float
-    max: float
+    type: Literal["int", "float", "bool", "choice", "weights", "tickers", "ticker"]
+    label: str
+    min: float | None = None
+    max: float | None = None
+    options: list[str] | None = None
+    market: str | None = None
 
 
 class MarketTimes(BaseModel):
@@ -72,7 +75,7 @@ class Status(BaseModel):
 class Snapshot(BaseModel):
     trading: Trading
     paused: Paused
-    config: dict[str, float | int | str]
+    config: dict[str, float | int | bool | str | list[float] | list[str]]
     editable: list[str]
 
 
@@ -144,7 +147,9 @@ def load_token(path: Path = ENV_FILE) -> str | None:
 def create_app(db_path: Path | str, token: str | None,
                web_dir: Path = Path(__file__).with_name("frontend") / "dist",
                db_timeout: float = 3.0) -> FastAPI:
-    db.connect(db_path).close()
+    conn = db.connect(db_path)
+    control.migrate(conn)
+    conn.close()
     app = FastAPI(title="market-cap-rebalancer", docs_url="/api/docs",
                   openapi_url="/api/openapi.json", redoc_url=None)
     bearer = HTTPBearer(auto_error=False)

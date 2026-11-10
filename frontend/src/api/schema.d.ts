@@ -84,15 +84,21 @@ export interface components {
         };
         /** Limit */
         Limit: {
+            /** Label */
+            label: string;
+            /** Market */
+            market?: string | null;
             /** Max */
-            max: number;
+            max?: number | null;
             /** Min */
-            min: number;
+            min?: number | null;
+            /** Options */
+            options?: string[] | null;
             /**
              * Type
              * @enum {string}
              */
-            type: "int" | "float";
+            type: "int" | "float" | "bool" | "choice" | "weights" | "tickers" | "ticker";
         };
         /** LogEntry */
         LogEntry: {
@@ -192,7 +198,7 @@ export interface components {
         Settings: {
             /** Config */
             config: {
-                [key: string]: number | string;
+                [key: string]: number | boolean | string | number[] | string[];
             };
             /** Editable */
             editable: string[];
@@ -220,7 +226,7 @@ export interface components {
         Snapshot: {
             /** Config */
             config: {
-                [key: string]: number | string;
+                [key: string]: number | boolean | string | number[] | string[];
             };
             /** Editable */
             editable: string[];

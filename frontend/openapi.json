@@ -16,18 +16,66 @@
       },
       "Limit": {
         "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "market": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market"
+          },
           "max": {
-            "title": "Max",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max"
           },
           "min": {
-            "title": "Min",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options"
           },
           "type": {
             "enum": [
               "int",
-              "float"
+              "float",
+              "bool",
+              "choice",
+              "weights",
+              "tickers",
+              "ticker"
             ],
             "title": "Type",
             "type": "string"
@@ -35,8 +83,7 @@
         },
         "required": [
           "type",
-          "min",
-          "max"
+          "label"
         ],
         "title": "Limit",
         "type": "object"
@@ -381,7 +428,22 @@
                   "type": "integer"
                 },
                 {
+                  "type": "boolean"
+                },
+                {
                   "type": "string"
+                },
+                {
+                  "items": {
+                    "type": "number"
+                  },
+                  "type": "array"
+                },
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
                 }
               ]
             },
@@ -481,7 +543,22 @@
                   "type": "integer"
                 },
                 {
+                  "type": "boolean"
+                },
+                {
                   "type": "string"
+                },
+                {
+                  "items": {
+                    "type": "number"
+                  },
+                  "type": "array"
+                },
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
                 }
               ]
             },

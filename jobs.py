@@ -18,7 +18,7 @@ import math
 import sqlite3
 import sys
 import time
-from dataclasses import asdict, fields
+from dataclasses import asdict, fields, replace
 from datetime import time as dtime, timedelta
 from pathlib import Path
 from typing import Any
@@ -49,9 +49,12 @@ class JobError(RuntimeError):
 
 
 def load_config(conn: sqlite3.Connection) -> Config:
-    known = {f.name for f in fields(Config)}
-    saved = {k: v for k, v in db.get_setting(conn, "config", {}).items() if k in known}
-    return Config(**saved, kr_taxable=frozenset(data.KR_UNIVERSE))
+    known = {f.name for f in fields(Config)} - {"kr_taxable"}
+    saved = {k: tuple(v) if isinstance(v, list) else v
+             for k, v in db.get_setting(conn, "config", {}).items() if k in known}
+    cfg = Config(**saved)
+    retired = db.get_setting(conn, "retired", {}).get("KR", {})
+    return replace(cfg, kr_taxable=frozenset(cfg.kr_universe) | {t for t, role in retired.items() if role == "stock"})
 
 
 def bond_of(mkt: Market, cfg: Config) -> str:
@@ -458,6 +461,7 @@ def main() -> None:
         handlers.append(logging.StreamHandler())
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", handlers=handlers)
     conn = db.connect(a.db)
+    control.migrate(conn)
     now = pd.Timestamp.now(tz="UTC")
 
     if a.cmd == "init":

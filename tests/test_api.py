@@ -148,3 +148,27 @@ def test_settings_ui_is_served(tmp_path):
     c = TestClient(api.create_app(tmp_path / "a.db", TOKEN, web_dir=dist))
     assert "<title>설정</title>" in c.get("/app/").text
     assert TestClient(api.create_app(tmp_path / "b.db", TOKEN, web_dir=tmp_path / "missing")).get("/app/").status_code == 404
+
+
+def test_settings_expose_typed_limits(client):
+    body = client.get("/api/v1/settings", headers=H).json()
+    assert body["limits"]["rank_weights"]["type"] == "weights"
+    assert body["config"]["rank_weights"] == [50, 30, 20, 0, 0]
+    assert body["limits"]["trade_every"]["options"] == ["day", "week", "month"]
+    assert body["config"]["fx_enabled"] is True and body["config"]["us_universe"][0] == "AAPL"
+    assert all(limit["label"] for limit in body["limits"].values())
+    assert set(body["editable"]) == set(body["limits"])
+    r = client.patch("/api/v1/settings", headers=H, json={"config": {"rank_weights": [40, 30, 20, 5, 5]}})
+    assert r.status_code == 200 and r.json()["config"]["rank_weights"] == [40, 30, 20, 5, 5]
+    assert client.patch("/api/v1/settings", headers=H, json={"config": {"rank_weights": [40, 30]}}).status_code == 400
+
+
+def test_create_app_migrates_old_config_once(db_path, tmp_path):
+    conn = db.connect(db_path)
+    db.set_setting(conn, "config", {"pair_confirm_days": 3, "confirm_days": 3, "us_pct": 50.0})
+    conn.close()
+    for _ in range(2):
+        c = TestClient(api.create_app(db_path, TOKEN, web_dir=tmp_path / "no-dist"))
+    config = c.get("/api/v1/settings", headers=H).json()["config"]
+    assert config["confirm_days"] == 0 and config["us_pct"] == 60
+    assert {row["source"] for row in c.get("/api/v1/settings/log", headers=H).json()} == {"migration"}
