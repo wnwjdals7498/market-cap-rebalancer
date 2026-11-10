@@ -8,6 +8,8 @@ from pathlib import Path
 import pandas as pd
 import yfinance as yf
 
+from strategy import Config
+
 warnings.filterwarnings("ignore")
 
 CACHE_DIR = Path(__file__).parent / "cache"
@@ -67,14 +69,21 @@ def split_adjusted_shares(ticker: str, start: str, index: pd.DatetimeIndex) -> p
 
 
 def load_market_data(start: str, end: str | None = None, extra: list[str] | None = None,
-                     refresh: bool = False) -> dict[str, pd.DataFrame]:
-    """Loads close/adj_close for universe + extra tickers, FX, and market caps.
+                     refresh: bool = False, mcap_tickers: list[str] | None = None) -> dict[str, pd.DataFrame]:
+    """Loads close/adj_close for market-cap tickers + extra tickers, FX, and market caps.
 
-    Market cap (USD for US, KRW for KR) = split-adjusted close x split-adjusted shares.
+    Market cap (USD for US, KR in KRW) = split-adjusted close x split-adjusted shares, computed only for
+    `mcap_tickers` (default: the Config default candidates of both markets). It is NaN before a
+    ticker's listing date, so callers must leave such days out of the ranking.
     """
     CACHE_DIR.mkdir(exist_ok=True)
-    tickers = sorted(set(US_UNIVERSE + KR_UNIVERSE + (extra or []) + [FX_TICKER]))
-    key = f"{start}_{end or 'latest'}_{hashlib.md5(','.join(tickers).encode()).hexdigest()[:8]}"
+    if mcap_tickers is None:
+        default = Config()
+        mcap_tickers = list(default.us_universe + default.kr_universe)
+    mcap_tickers = list(dict.fromkeys(mcap_tickers))
+    tickers = sorted(set(mcap_tickers + (extra or []) + [FX_TICKER]))
+    digest = hashlib.md5((','.join(tickers) + '|' + ','.join(sorted(mcap_tickers))).encode()).hexdigest()[:8]
+    key = f"{start}_{end or 'latest'}_{digest}"
     paths = {n: CACHE_DIR / f"{n}_{key}.csv" for n in ("close", "adj", "mcap")}
 
     if not refresh and all(p.exists() for p in paths.values()):
@@ -82,7 +91,7 @@ def load_market_data(start: str, end: str | None = None, extra: list[str] | None
 
     close, adj = download_prices(tickers, start, end)
     mcap = pd.DataFrame(index=close.index)
-    for t in US_UNIVERSE + KR_UNIVERSE:
+    for t in mcap_tickers:
         mcap[t] = close[t] * split_adjusted_shares(t, start, close.index)
 
     out = {"close": close, "adj": adj, "mcap": mcap}
