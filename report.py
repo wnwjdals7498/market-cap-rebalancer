@@ -129,9 +129,21 @@ def pocket_values(conn: sqlite3.Connection) -> tuple[float | None, float | None]
     return out[0], out[1]
 
 
+def pocket_cash(conn: sqlite3.Connection, market: str) -> float | None:
+    """Cash in the latest positions snapshot of one pocket (local currency)."""
+    d = _latest(conn, "positions", market, "date")
+    if d is None:
+        return None
+    row = conn.execute("SELECT value FROM positions WHERE market = ? AND date = ? AND ticker = 'CASH'",
+                       (market, d)).fetchone()
+    return row[0] if row else 0.0
+
+
 def build_report(conn: sqlite3.Connection, day: str, usdkrw: float | None,
-                 last: dict | None = None, first: dict | None = None) -> tuple[str, float | None]:
-    """(text, total in KRW or None without an FX rate). last/first: earlier reports' {date, total}."""
+                 last: dict | None = None, first: dict | None = None,
+                 extra: list[str] | None = None) -> tuple[str, float | None]:
+    """(text, total in KRW or None without an FX rate). last/first: earlier reports' {date, total};
+    extra: lines (e.g. the FX plan) shown between the markets and the warnings."""
     wd = WEEKDAYS[pd.Timestamp(day).dayofweek]
     kr_lines, kr_val, kr_warn = market_section(conn, "KR")
     us_lines, us_val, us_warn = market_section(conn, "US")
@@ -151,6 +163,8 @@ def build_report(conn: sqlite3.Connection, day: str, usdkrw: float | None,
     else:
         out.append("총자산 환율 조회 실패 — 원화/달러 따로 표시")
     out += ["", *kr_lines, "", *us_lines]
+    if extra:
+        out += ["", *extra]
     warns = kr_warn + us_warn
     out += ["", "⚠️ 확인 필요", *(f"  {w}" for w in warns)] if warns else ["", "✅ 이상 없음"]
     return "\n".join(out), total

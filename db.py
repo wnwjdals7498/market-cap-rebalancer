@@ -154,6 +154,11 @@ def set_setting(conn: sqlite3.Connection, key: str, value) -> None:
         conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", (key, json.dumps(value)))
 
 
+def delete_setting(conn: sqlite3.Connection, key: str) -> None:
+    with conn:
+        conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+
+
 def log_setting_change(conn: sqlite3.Connection, key: str, old, new, source: str) -> None:
     conn.execute("INSERT INTO settings_log (at, key, old, new, source) VALUES (?, ?, ?, ?, ?)",
                  (now_iso(), key, json.dumps(old), json.dumps(new), source))

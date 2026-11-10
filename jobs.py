@@ -34,8 +34,8 @@ from brokers import Broker, SimBroker
 from execution import ExecParams, execute, limit_price
 from markets import MARKETS, Market, current_session, session_times
 from sources import FallbackSource, Quote, Source, YFinanceSource
-from strategy import (CASH, Config, RankState, plan_moves, pocket_value, pocket_weights, stock_weights, trade_cost,
-                      trade_due, update_ranking)
+from strategy import (CASH, Config, RankState, fx_amount, fx_gap, plan_moves, pocket_value, pocket_weights,
+                      stock_weights, trade_cost, trade_due, update_ranking)
 
 log = logging.getLogger("mcr")
 
@@ -184,7 +184,10 @@ def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source,
         if broker:
             db.save_positions(conn, session, mkt.code, units, prices)
         value = pocket_value(units, prices)
-        investable = value  # seam for the FX plan: cash to keep out of the market (Task 4)
+        investable = value
+        plan = db.get_setting(conn, FX_PLAN)
+        if cfg.fx_enabled and plan and plan["from"] == mkt.code:
+            investable = max(value - plan["amount"], 0.0)  # keep the cash the user is asked to exchange out of the market, ready or not
 
         top = " > ".join(t for t, _ in ranked[:3])
         last = db.last_trade_date(conn, mkt.code, before=session)
@@ -293,12 +296,78 @@ def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source
     return _guarded("execute", conn, mkt, session, force, work)
 
 
+FX_PLAN = "fx:plan"      # {"from": "US"|"KR", "amount": <source pocket currency>, "created": date, "ready": date|None}
+FX_CASH_TOLERANCE = 0.99  # fees and share rounding leave the reserved cash a hair under the amount
+POCKET = {"US": ("미국", "원화"), "KR": ("한국", "달러")}  # pocket name, currency it is exchanged into
+
+
+def fx_review(conn: sqlite3.Connection, today: str, usdkrw: float | None, cfg: Config, send: bool) -> list[str]:
+    """Advance the manual FX plan once per daily report and return the report lines for it.
+    send=False (report --print) only describes: nothing is saved or sent."""
+    plan = db.get_setting(conn, FX_PLAN)
+    kr_val, us_val = report.pocket_values(conn)
+    gap = None  # unknown without a rate, a synced pocket pair or any assets
+    if usdkrw and kr_val is not None and us_val is not None and kr_val + us_val * usdkrw > 0:
+        gap = fx_gap(us_val * usdkrw, kr_val, cfg)
+
+    def alert(text: str) -> None:
+        if send:
+            notify.send(text)
+
+    def drop() -> None:
+        if send:
+            db.delete_setting(conn, FX_PLAN)
+
+    if plan:
+        src = plan["from"]
+        pocket, other = POCKET[src]
+        amount, cash = plan["amount"], report.pocket_cash(conn, src) or 0.0
+        money = report.money(amount, src)
+        ready = plan["ready"]
+        days = (dt_date.fromisoformat(today) - dt_date.fromisoformat(ready)).days if ready else 0
+        if ready and cash < amount * 0.5:  # (1) the user exchanged
+            drop()
+            alert(f"💱 환전 완료 확인: {pocket} 포켓 {money} → {other}. 환전 계획을 지웁니다")
+            return [f"  💱 환전 완료 확인 ({pocket} 포켓 {money}), 계획 삭제"]
+        if ready and days > cfg.fx_wait_days:  # (2) nobody exchanged: reinvest, stop planning
+            drop()
+            if send:
+                control.update(conn, {"config": {"fx_enabled": False}}, "system")
+            alert(f"💱 환전 대기 {days}일 초과: 현금 재투자, 환전 계획 꺼짐")
+            return [f"  💱 환전 대기 {days}일 초과: 현금 재투자, 환전 계획 꺼짐"]
+        if gap == 0.0:  # (5) back inside the band, or FX switched off; checked before (3) so a drifted plan can't linger
+            drop()
+            alert("💱 비율 회복: 환전 계획을 지웁니다" if cfg.fx_enabled else "💱 환전 안내가 꺼져 환전 계획을 지웁니다")
+            return ["  💱 미국/한국 비율 회복, 환전 계획 삭제" if cfg.fx_enabled else "  💱 환전 안내 꺼짐, 환전 계획 삭제"]
+        if not ready and cash >= amount * FX_CASH_TOLERANCE:  # (3) the cash is waiting
+            ready = today
+            if send:
+                db.set_setting(conn, FX_PLAN, plan | {"ready": ready})
+            alert(f"💱 환전 안내: {pocket} 포켓 현금 {money} 를 {other}로 환전하세요")
+        if ready:
+            return [f"  💱 환전 필요: {pocket} 포켓 현금 {money} 를 {other}로 환전하세요 (안내 {ready}, {cfg.fx_wait_days}일 안에)"]
+        return [f"  💱 환전 계획: {pocket} 포켓 {money} → {other} (생성 {plan['created']}, 다음 매매일에 현금 확보)"]
+
+    if gap and usdkrw and kr_val is not None and us_val is not None:  # (4)
+        src = "KR" if gap > 0 else "US"
+        source_krw = kr_val if src == "KR" else us_val * usdkrw
+        amount = fx_amount(gap, source_krw, cfg) / (usdkrw if src == "US" else 1.0)
+        if amount > 0:
+            pocket, other = POCKET[src]
+            if send:
+                db.set_setting(conn, FX_PLAN, {"from": src, "amount": round(amount, 2), "created": today, "ready": None})
+            money = report.money(amount, src)
+            alert(f"💱 환전 계획: {pocket} 포켓 {money} → {other} (다음 매매일에 현금 확보 후 안내)")
+            return [f"  💱 환전 계획: {pocket} 포켓 {money} → {other} (생성 {today}, 다음 매매일에 현금 확보)"]
+    return []
+
+
 REPORT_AT = dtime(8, 0)  # KST: before the KR session, after the US session has closed
 SITE_DIR = Path(__file__).with_name("site")
 
 
 def run_report(conn: sqlite3.Connection, now: pd.Timestamp, fx=report.fetch_usdkrw, force: bool = False,
-               send: bool = True) -> str:
+               send: bool = True, cfg: Config | None = None) -> str:
     """Daily report over the latest SQLite state; skipped when no job ran since the previous report."""
     day = now.tz_convert("Asia/Seoul").strftime("%Y-%m-%d")
 
@@ -313,7 +382,8 @@ def run_report(conn: sqlite3.Connection, now: pd.Timestamp, fx=report.fetch_usdk
         except Exception as e:  # report without a KRW total rather than not at all
             log.warning("USD/KRW fetch failed: %s", e)
             usdkrw = None
-        text, total = report.build_report(conn, day, usdkrw, last, first)
+        fx_lines = fx_review(conn, day, usdkrw, cfg or load_config(conn), send)
+        text, total = report.build_report(conn, day, usdkrw, last, first, fx_lines)
         kr_val, us_val = report.pocket_values(conn)
         if usdkrw and kr_val is not None and us_val is not None:
             db.save_equity(conn, day, kr_val, us_val, usdkrw)
@@ -361,7 +431,7 @@ def tick(conn: sqlite3.Connection, src: Source, cfg: Config, now: pd.Timestamp,
     kst = now.tz_convert("Asia/Seoul")
     if kst.time() >= REPORT_AT and db.run_status(conn, "report", "ALL", kst.strftime("%Y-%m-%d")) not in ("OK", "SKIPPED"):
         try:
-            out.append(run_report(conn, now, fx=fx))
+            out.append(run_report(conn, now, fx=fx, cfg=cfg))
         except Exception as e:
             out.append(f"report FAILED: {e!r}")
     return out

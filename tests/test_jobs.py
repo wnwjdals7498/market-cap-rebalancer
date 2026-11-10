@@ -43,7 +43,8 @@ def env(tmp_path):
     conn = db.connect(tmp_path / "t.db")
     db.save_positions(conn, "2026-10-26", "US", {CASH: 100_000.0}, {})
     db.save_positions(conn, "2026-10-26", "KR", {CASH: 0.0}, {})
-    return conn, FakeSource(), Config(us_fee=0, trade_every="day")
+    db.set_setting(conn, "config", {"fx_enabled": False})  # the US-only account would otherwise plan an FX move
+    return conn, FakeSource(), Config(us_fee=0, trade_every="day", fx_enabled=False)
 
 
 def run_day(conn, src, cfg, day, mcaps, prices=None):
@@ -292,7 +293,8 @@ def test_empty_account_report_is_not_a_baseline(tmp_path, no_real_alerts):
     """broker=kis starts from `init --usd 0 --krw 0`: SQLite holds CASH 0 until a submitted execute syncs the
     account, so the first reports total 0. That must not break the web page or pin the 누적 baseline at 0."""
     import webreport
-    conn, src, cfg = db.connect(tmp_path / "z.db"), FakeSource(), Config(us_fee=0)
+    conn, src, cfg = db.connect(tmp_path / "z.db"), FakeSource(), Config(us_fee=0, fx_enabled=False)
+    db.set_setting(conn, "config", {"fx_enabled": False})
     for m in ("US", "KR"):
         db.save_positions(conn, "2026-10-26", m, {CASH: 0.0}, {})
     jobs.run_report(conn, pd.Timestamp("2026-10-26 17:15", tz="Asia/Seoul"), fx=lambda: 1400.0)
@@ -472,3 +474,145 @@ def test_kr_taxable_includes_retired_stock(tmp_path):
     db.set_setting(conn, "retired", {"KR": {"207940.KS": "stock", "148070.KS": "bond"}})
     taxable = jobs.load_config(conn).kr_taxable
     assert taxable == set(Config().kr_universe) | {"207940.KS"}
+
+
+# --- FX plan -----------------------------------------------------------------
+
+FX = 1400.0
+
+
+@pytest.fixture
+def fx_env(env):
+    """US pocket invested 100k USD (all at 100), KR pocket empty: far above the 60% US target."""
+    conn, src, cfg = env
+    db.set_setting(conn, "config", {"fx_enabled": True})
+    cfg = replace(cfg, fx_enabled=True)
+    run_day(conn, src, cfg, "2026-10-26", TOP3)
+    return conn, src, cfg
+
+
+def report_at(conn, day, **kw):
+    return jobs.run_report(conn, pd.Timestamp(f"{day} 08:05", tz="Asia/Seoul"), fx=lambda: FX, **kw)
+
+
+def fx_alerts(alerts):
+    return [m for m in alerts if m.startswith("💱")]
+
+
+def test_fx_plan_created_then_cash_reserved(fx_env, no_real_alerts):
+    conn, src, cfg = fx_env
+    report_at(conn, "2026-10-27")
+    plan = db.get_setting(conn, "fx:plan")
+    assert plan == {"from": "US", "amount": 10_000.0, "created": "2026-10-27", "ready": None}  # 10% of the pocket
+    assert len(fx_alerts(no_real_alerts)) == 1 and "미국 포켓 $10,000.00 → 원화" in fx_alerts(no_real_alerts)[0]
+    assert "💱 환전 계획" in no_real_alerts[-1]  # and the daily report carries a line
+
+    units = run_day(conn, src, cfg, "2026-10-27", TOP3)  # next US trade day
+    assert sum(w for w, _ in db.load_targets(conn, "2026-10-27", "US").values()) == pytest.approx(0.9)
+    assert units[CASH] == pytest.approx(10_000)
+
+
+def test_fx_plan_ready_alert_once_then_exchanged(fx_env, no_real_alerts):
+    conn, src, cfg = fx_env
+    report_at(conn, "2026-10-27")
+    run_day(conn, src, cfg, "2026-10-27", TOP3)
+    no_real_alerts.clear()
+
+    report_at(conn, "2026-10-28", force=True)
+    assert db.get_setting(conn, "fx:plan")["ready"] == "2026-10-28"
+    notices = [m for m in no_real_alerts if m.startswith("💱 환전 안내")]
+    assert len(notices) == 1 and "미국 포켓 현금 $10,000.00 를 원화로 환전하세요" in notices[0]
+    no_real_alerts.clear()
+    report_at(conn, "2026-10-29", force=True)  # still waiting: the daily line, no new notice
+    assert fx_alerts(no_real_alerts) == [] and "💱 환전 필요" in no_real_alerts[-1]
+
+    units = db.latest_positions(conn, "US")[1] | {CASH: 0.0}  # the user exchanged the cash
+    db.save_positions(conn, "2026-10-29", "US", units, {t: 100.0 for t in units})
+    no_real_alerts.clear()
+    report_at(conn, "2026-10-30", force=True)
+    assert db.get_setting(conn, "fx:plan") is None
+    assert len(fx_alerts(no_real_alerts)) == 1 and "환전 완료" in no_real_alerts[0]
+
+
+def test_fx_wait_timeout_disables_fx(fx_env, no_real_alerts):
+    conn, src, cfg = fx_env
+    report_at(conn, "2026-10-27")
+    run_day(conn, src, cfg, "2026-10-27", TOP3)
+    report_at(conn, "2026-10-28", force=True)  # ready
+    report_at(conn, "2026-10-31", force=True)  # 3 days: still within fx_wait_days
+    assert db.get_setting(conn, "fx:plan") is not None
+    no_real_alerts.clear()
+    report_at(conn, "2026-11-01", force=True)  # 4th day
+    assert db.get_setting(conn, "fx:plan") is None
+    assert db.get_setting(conn, "config")["fx_enabled"] is False
+    assert [r["source"] for r in db.setting_changes(conn, 1)] == ["system"]
+    assert any("환전 대기 4일 초과" in m for m in no_real_alerts)
+    report_at(conn, "2026-11-02", force=True)  # switched off: no new plan
+    assert db.get_setting(conn, "fx:plan") is None
+
+    units = run_day(conn, src, cfg, "2026-11-02", TOP3)  # next trade day reinvests the cash
+    assert units[CASH] == pytest.approx(0, abs=1)
+
+
+def test_fx_plan_cleared_when_ratio_recovers(fx_env, no_real_alerts):
+    conn, src, cfg = fx_env
+    report_at(conn, "2026-10-27")
+    db.save_positions(conn, "2026-10-27", "KR", {CASH: 93_000_000.0}, {})  # KR funded: US 60.1%
+    no_real_alerts.clear()
+    report_at(conn, "2026-10-28", force=True)
+    assert db.get_setting(conn, "fx:plan") is None
+    assert len(fx_alerts(no_real_alerts)) == 1 and "비율 회복" in no_real_alerts[0]
+
+
+def test_fx_reserve_only_for_the_source_market(fx_env):
+    conn, src, cfg = fx_env
+    db.set_setting(conn, "fx:plan", {"from": "KR", "amount": 5_000_000.0, "created": "2026-10-27", "ready": None})
+    run_day(conn, src, cfg, "2026-10-27", TOP3)
+    assert sum(w for w, _ in db.load_targets(conn, "2026-10-27", "US").values()) == pytest.approx(1.0)
+    db.set_setting(conn, "fx:plan", {"from": "US", "amount": 10_000.0, "created": "2026-10-27", "ready": "2026-10-28"})
+    run_day(conn, src, replace(cfg, fx_enabled=False), "2026-10-28", TOP3)  # FX switched off: nothing reserved
+    assert sum(w for w, _ in db.load_targets(conn, "2026-10-28", "US").values()) == pytest.approx(1.0)
+
+
+def test_ready_plan_keeps_cash_reserved_on_daily_trade_days(fx_env, no_real_alerts):
+    conn, src, cfg = fx_env  # trade_every="day"
+    report_at(conn, "2026-10-27")
+    run_day(conn, src, cfg, "2026-10-27", TOP3)
+    report_at(conn, "2026-10-28", force=True)
+    assert db.get_setting(conn, "fx:plan")["ready"] == "2026-10-28"
+
+    units = run_day(conn, src, cfg, "2026-10-28", TOP3)  # the next daily trade day: the cash stays put
+    assert units[CASH] == pytest.approx(10_000)
+    assert sum(w for w, _ in db.load_targets(conn, "2026-10-28", "US").values()) == pytest.approx(0.9)
+    no_real_alerts.clear()
+    report_at(conn, "2026-10-29", force=True)
+    plan = db.get_setting(conn, "fx:plan")  # still waiting, not mistaken for an exchange
+    assert plan and plan["ready"] == "2026-10-28" and fx_alerts(no_real_alerts) == []
+    assert "💱 환전 필요" in no_real_alerts[-1]
+
+
+def test_report_print_does_not_touch_the_plan(fx_env, no_real_alerts):
+    conn, src, cfg = fx_env
+    no_real_alerts.clear()
+    jobs.run_report(conn, pd.Timestamp("2026-10-27 08:05", tz="Asia/Seoul"), fx=lambda: FX, send=False)
+    assert db.get_setting(conn, "fx:plan") is None and no_real_alerts == []
+
+
+def test_no_fx_plan_when_total_zero(env, no_real_alerts):
+    conn, src, cfg = env
+    db.set_setting(conn, "config", {"fx_enabled": True})
+    db.save_positions(conn, "2026-10-26", "US", {CASH: 0.0}, {})
+    report_at(conn, "2026-10-27", force=True)
+    assert db.get_setting(conn, "fx:plan") is None and fx_alerts(no_real_alerts) == []
+
+
+@pytest.mark.parametrize("enabled, us, kr", [(False, 100_000.0, 0.0),            # switched off
+                                              (True, 60_000.0, 56_000_000.0),      # exactly 60/40
+                                              (True, 64_000.0, 50_400_000.0)])     # 64.0% US: inside the 5pp band
+def test_no_fx_plan_when_disabled_or_in_band(env, no_real_alerts, enabled, us, kr):
+    conn, src, cfg = env
+    db.set_setting(conn, "config", {"fx_enabled": enabled})
+    db.save_positions(conn, "2026-10-26", "US", {CASH: us}, {})
+    db.save_positions(conn, "2026-10-26", "KR", {CASH: kr}, {})
+    report_at(conn, "2026-10-27", force=True)
+    assert db.get_setting(conn, "fx:plan") is None and fx_alerts(no_real_alerts) == []
