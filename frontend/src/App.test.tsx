@@ -147,9 +147,9 @@ describe('settings UI', () => {
     const bond = screen.getByLabelText('미국 단기채')
     await userEvent.clear(bond)
     await userEvent.type(bond, 'bil')
-    const last = screen.getByLabelText('미국 주식 후보 5')
-    await userEvent.clear(last)
-    await userEvent.type(last, 'meta')
+    const pool = screen.getByLabelText('미국 후보 풀 (자동 갱신)')
+    await userEvent.clear(pool)
+    await userEvent.type(pool, 'aapl, nvda, msft, googl, meta')
     await userEvent.click(screen.getByRole('button', { name: '저장' }))
     await waitFor(() => expect(patchCalls(fetchFn)).toHaveLength(1))
     expect(JSON.parse(String(patchCalls(fetchFn)[0][1]?.body))).toEqual({
@@ -159,6 +159,47 @@ describe('settings UI', () => {
         us_universe: ['AAPL', 'NVDA', 'MSFT', 'GOOGL', 'META'],
       },
     })
+  })
+
+  it('pool list accepts 15 comma separated tickers', async () => {
+    sessionStorage.setItem('mcr_token', 't')
+    const fetchFn = stubFetch({ ...defaultRoutes(), 'PATCH /api/v1/settings': () => json(settings) })
+    render(<App />)
+    const pool = await screen.findByLabelText('미국 후보 풀 (자동 갱신)')
+    expect(screen.getAllByText('5개 (5 ~ 30), 쉼표로 구분')).toHaveLength(2) // US and KR pools
+    const fifteen = 'aapl,nvda,msft,googl,amzn,meta,tsla,avgo,tsm,brk-b,lly,wmt,jpm,v,orcl'
+    await userEvent.clear(pool)
+    await userEvent.type(pool, fifteen)
+    expect(screen.getByText('15개 (5 ~ 30), 쉼표로 구분')).toBeInTheDocument()
+    const save = screen.getByRole('button', { name: '저장' })
+    expect(save).toBeEnabled()
+    await userEvent.click(save)
+    await waitFor(() => expect(patchCalls(fetchFn)).toHaveLength(1))
+    expect(JSON.parse(String(patchCalls(fetchFn)[0][1]?.body))).toEqual({
+      config: { us_universe: fifteen.toUpperCase().split(',') },
+    })
+  })
+
+  it('pool list rejects 4', async () => {
+    sessionStorage.setItem('mcr_token', 't')
+    stubFetch({ ...defaultRoutes(), 'PATCH /api/v1/settings': () => json(settings) })
+    render(<App />)
+    const pool = await screen.findByLabelText('미국 후보 풀 (자동 갱신)')
+    await userEvent.clear(pool)
+    await userEvent.type(pool, 'AAPL, NVDA, MSFT, GOOGL')
+    expect(screen.getByText('종목 5 ~ 30개여야 합니다 (현재 4)')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '저장' })).toBeDisabled()
+  })
+
+  it('pool list rejects duplicates', async () => {
+    sessionStorage.setItem('mcr_token', 't')
+    stubFetch({ ...defaultRoutes(), 'PATCH /api/v1/settings': () => json(settings) })
+    render(<App />)
+    const pool = await screen.findByLabelText('미국 후보 풀 (자동 갱신)')
+    await userEvent.clear(pool)
+    await userEvent.type(pool, 'aapl, AAPL, msft, googl, meta')
+    expect(screen.getByText('중복된 종목이 있습니다')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '저장' })).toBeDisabled()
   })
 
   it('shows strategy state and the status fx plan', async () => {

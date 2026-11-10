@@ -10,19 +10,23 @@ interface Props {
   onUnauthorized: () => void
 }
 
-/** 입력 중인 값. 숫자·문자열은 문자열 그대로, 체크박스는 boolean, 여러 칸 항목은 칸마다 문자열. */
+/** 입력 중인 값. 숫자·문자열·종목 목록(쉼표 구분)은 문자열 그대로, 체크박스는 boolean, 비율은 칸마다 문자열. */
 type Draft = string | boolean | string[]
 
 const EVERY_LABEL: Record<string, string> = { day: '일간', week: '주간', month: '월간' }
-const SLOTS = 5
 
 function display(value: ConfigValue | Draft | undefined): string {
   return Array.isArray(value) ? value.join(', ') : String(value)
 }
 
+/** 쉼표로 구분한 입력 → 대문자 종목 목록 (빈 항목은 그대로 둬 검사에서 걸린다) */
+function splitTickers(raw: string): string[] {
+  return raw.trim() === '' ? [] : raw.split(',').map((t) => t.trim().toUpperCase())
+}
+
 /** 서버 값 → 입력 칸 초기값 */
-function initial(value: ConfigValue): Draft {
-  if (Array.isArray(value)) return value.map(String)
+function initial(value: ConfigValue, limit?: Limit): Draft {
+  if (Array.isArray(value)) return limit?.type === 'tickers' ? value.join(', ') : value.map(String)
   if (typeof value === 'boolean') return value
   return String(value)
 }
@@ -67,8 +71,10 @@ function parse(draft: Draft, limit: Limit): { value: ConfigValue } | { problem: 
       return { value: numbers }
     }
     case 'tickers': {
-      const names = (draft as string[]).map((t) => t.trim().toUpperCase())
-      if (names.some((t) => t === '')) return { problem: `종목 ${SLOTS}개를 입력하세요` }
+      const names = splitTickers(String(draft))
+      const [lo, hi] = [limit.min ?? 1, limit.max ?? Infinity]
+      if (names.some((t) => t === '')) return { problem: '빈 종목이 있습니다 (쉼표 확인)' }
+      if (names.length < lo || names.length > hi) return { problem: `종목 ${range(limit)}개여야 합니다 (현재 ${names.length})` }
       if (new Set(names).size !== names.length) return { problem: '중복된 종목이 있습니다' }
       return { value: names }
     }
@@ -101,7 +107,7 @@ export function StrategyPanel({ client, settings, onChange, onUnauthorized }: Pr
   }
 
   function cells(key: string): string[] {
-    const draft = drafts[key] ?? initial(settings.config[key])
+    const draft = drafts[key] ?? initial(settings.config[key], settings.limits[key])
     return Array.isArray(draft) ? draft : []
   }
 
@@ -120,7 +126,7 @@ export function StrategyPanel({ client, settings, onChange, onUnauthorized }: Pr
   }
 
   function input(key: string, limit: Limit) {
-    const value = drafts[key] ?? initial(settings.config[key])
+    const value = drafts[key] ?? initial(settings.config[key], limit)
     const id = `cfg-${key}`
     switch (limit.type) {
       case 'int':
@@ -153,17 +159,22 @@ export function StrategyPanel({ client, settings, onChange, onUnauthorized }: Pr
           <input id={id} type="text" value={String(value)} aria-invalid={key in problems}
                  onChange={(e) => edit(key, e.target.value)} />
         )
-      case 'weights':
       case 'tickers':
+        return (
+          <input id={id} type="text" value={String(value)} aria-invalid={key in problems}
+                 spellCheck={false} autoCapitalize="characters"
+                 onChange={(e) => edit(key, e.target.value)} />
+        )
+      case 'weights':
         return (
           <div className="cells" role="group" aria-labelledby={`${id}-label`}>
             {cells(key).map((cell, i) => (
               <input
                 key={i}
-                type={limit.type === 'weights' ? 'number' : 'text'}
-                inputMode={limit.type === 'weights' ? 'decimal' : undefined}
-                step={limit.type === 'weights' ? 'any' : undefined}
-                aria-label={limit.type === 'weights' ? `${i + 1}위 비율` : `${limit.label} ${i + 1}`}
+                type="number"
+                inputMode="decimal"
+                step="any"
+                aria-label={`${i + 1}위 비율`}
                 value={cell}
                 aria-invalid={key in problems}
                 onChange={(e) => editCell(key, i, e.target.value)}
@@ -178,6 +189,9 @@ export function StrategyPanel({ client, settings, onChange, onUnauthorized }: Pr
     if (problems[key]) return problems[key]
     if (limit.type === 'int' || limit.type === 'float') return range(limit)
     if (limit.type === 'weights') return `합계 ${sum(cells(key))} / 100`
+    if (limit.type === 'tickers') {
+      return `${splitTickers(String(drafts[key] ?? initial(settings.config[key], limit))).length}개 (${range(limit)}), 쉼표로 구분`
+    }
     return ''
   }
 
