@@ -230,8 +230,16 @@ def plan_orders(targets: dict[str, tuple[float, float]], units: dict[str, float]
     min_trade = cfg.min_trade_pct / 100 * value
     orders = []
     for t in sorted((set(targets) | set(units)) - {CASH}):
-        want = math.floor(targets.get(t, (0.0, 0.0))[0] * value / prices[t])
-        delta = want - int(units.get(t, 0))
+        weight = targets.get(t, (0.0, 0.0))[0]
+        held = int(units.get(t, 0))
+        exact = weight * value / prices[t]
+        if weight == 0:
+            want = 0
+        elif exact < held:
+            want = math.ceil(exact - 1e-9)
+        else:
+            want = math.floor(exact + 1e-9)
+        delta = want - held
         if delta and (want == 0 or abs(delta) * prices[t] >= min_trade):
             orders.append((t, delta))
     return orders

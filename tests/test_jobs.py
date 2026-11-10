@@ -61,6 +61,18 @@ TOP3 = {"AAPL": 5000, "NVDA": 4900, "MSFT": 4800}  # others tie at 1: GOOGL, AMZ
 E_TO_A = {"AMZN": 5000, "GOOGL": 4000, "MSFT": 3000, "NVDA": 2000, "AAPL": 1000}
 
 
+def test_plan_orders_rounds_toward_current_holding():
+    cfg = Config(min_trade_pct=0)
+    assert jobs.plan_orders({"X": (.9, 1000)}, {"X": 1}, {"X": 1000}, cfg) == []
+    assert jobs.plan_orders({"X": (.95, 100)}, {"X": 10}, {"X": 100}, cfg) == []
+    assert jobs.plan_orders({"X": (.82, 100)}, {"X": 10}, {"X": 100}, cfg) == [("X", -1)]
+    assert jobs.plan_orders({"X": (.37, 100)}, {"X": 1, CASH: 900}, {"X": 100}, cfg) == [("X", 2)]
+    assert jobs.plan_orders({"X": (0, 100)}, {"X": 10}, {"X": 100}, cfg) == [("X", -10)]
+    assert jobs.plan_orders({}, {"X": 10}, {"X": 100}, cfg) == [("X", -10)]
+    assert jobs.plan_orders({"X": ((9 + 1e-10) / 10, 100)}, {"X": 10}, {"X": 100}, cfg) == [("X", -1)]
+    assert jobs.plan_orders({"X": ((3 - 1e-10) / 10, 100)}, {"X": 1, CASH: 900}, {"X": 100}, cfg) == [("X", 2)]
+
+
 def test_rank_weights_targets_on_trade_day(env):
     conn, src, cfg = env
     set_day(src, "2026-10-26", E_TO_A)
