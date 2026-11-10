@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr, WithJsonSchem
 
 import control
 import db
+import jobs
 import webreport
 from markets import MARKETS, current_session
 
@@ -64,11 +65,28 @@ class Run(BaseModel):
     detail: str | None
 
 
+class MarketStrategy(BaseModel):
+    ranking: list[str]
+    confirmed: list[str]
+    targets: dict[str, float]
+    last_trade: str | None
+
+
+class FxPlan(BaseModel):
+    from_market: str
+    amount: float
+    currency: str
+    created: str
+    ready: str | None
+
+
 class Status(BaseModel):
     trading: Trading
     paused: Paused
     markets: dict[str, MarketTimes]
     runs: list[Run]
+    strategy: dict[str, MarketStrategy]
+    fx: FxPlan | None
     db_version: str
 
 
@@ -205,8 +223,17 @@ def create_app(db_path: Path | str, token: str | None,
                        for key in ("signal", "execute", "close")},
                 }
         runs = [dict(row) for row in conn.execute("SELECT * FROM runs ORDER BY started_at DESC LIMIT 10")]
+        strategy = {code: {"ranking": db.latest_rankings(conn, code),
+                           "confirmed": db.load_rank_state(conn, code, "9999-12-31").confirmed,
+                           "targets": db.latest_targets(conn, code),
+                           "last_trade": db.last_trade_date(conn, code)} for code in MARKETS}
+        plan = db.get_setting(conn, jobs.FX_PLAN)
+        fx = plan and {"from_market": plan["from"], "amount": plan["amount"],
+                       "currency": MARKETS[plan["from"]].currency, "created": plan["created"],
+                       "ready": plan["ready"]}
         return {"trading": control.trading_settings(conn), "paused": control.paused(conn),
-                "markets": market_status, "runs": runs, "db_version": webreport.db_version(db_path)}
+                "markets": market_status, "runs": runs, "strategy": strategy, "fx": fx or None,
+                "db_version": webreport.db_version(db_path)}
 
     @router.get("/settings", response_model=Settings)
     def get_settings(conn: sqlite3.Connection = Depends(connection)):

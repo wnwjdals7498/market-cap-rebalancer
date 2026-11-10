@@ -8,6 +8,7 @@ import api
 import db
 import markets
 import webreport
+from strategy import RankState
 
 TOKEN = "t" * 32
 H = {"Authorization": f"Bearer {TOKEN}"}
@@ -172,3 +173,25 @@ def test_create_app_migrates_old_config_once(db_path, tmp_path):
     config = c.get("/api/v1/settings", headers=H).json()["config"]
     assert config["confirm_days"] == 0 and config["us_pct"] == 60
     assert {row["source"] for row in c.get("/api/v1/settings/log", headers=H).json()} == {"migration"}
+
+
+def test_status_includes_strategy_and_fx(client, db_path):
+    s = client.get("/api/v1/status", headers=H).json()
+    assert s["strategy"] == {code: {"ranking": [], "confirmed": [], "targets": {}, "last_trade": None}
+                             for code in ("KR", "US")}
+    assert s["fx"] is None
+
+    conn = db.connect(db_path)
+    db.save_rankings(conn, "2026-11-09", "US", [("AAPL", 5e12), ("NVDA", 4e12)])
+    db.save_rank_state(conn, "2026-11-09", "US", RankState(confirmed=["NVDA", "AAPL"], pending=["AAPL", "NVDA"], streak=1))
+    db.save_targets(conn, "2026-11-09", "US", {"NVDA": (0.3, 100.0), "SHY": (0.4, 80.0)})
+    db.claim_run(conn, "execute", "US", "2026-11-09")
+    db.finish_run(conn, "execute", "US", "2026-11-09", "OK")
+    db.set_setting(conn, "fx:plan", {"from": "US", "amount": 9000.0, "created": "2026-11-10", "ready": None})
+    conn.close()
+    s = client.get("/api/v1/status", headers=H).json()
+    assert s["strategy"]["US"] == {"ranking": ["AAPL", "NVDA"], "confirmed": ["NVDA", "AAPL"],
+                                   "targets": {"NVDA": 0.3, "SHY": 0.4}, "last_trade": "2026-11-09"}
+    assert s["strategy"]["KR"]["ranking"] == []
+    assert s["fx"] == {"from_market": "US", "amount": 9000.0, "currency": "USD", "created": "2026-11-10",
+                       "ready": None}

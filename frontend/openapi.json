@@ -1,6 +1,46 @@
 {
   "components": {
     "schemas": {
+      "FxPlan": {
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "number"
+          },
+          "created": {
+            "title": "Created",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "from_market": {
+            "title": "From Market",
+            "type": "string"
+          },
+          "ready": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ready"
+          }
+        },
+        "required": [
+          "from_market",
+          "amount",
+          "currency",
+          "created",
+          "ready"
+        ],
+        "title": "FxPlan",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -138,6 +178,50 @@
           "source"
         ],
         "title": "LogEntry",
+        "type": "object"
+      },
+      "MarketStrategy": {
+        "properties": {
+          "confirmed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Confirmed",
+            "type": "array"
+          },
+          "last_trade": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Trade"
+          },
+          "ranking": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Ranking",
+            "type": "array"
+          },
+          "targets": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Targets",
+            "type": "object"
+          }
+        },
+        "required": [
+          "ranking",
+          "confirmed",
+          "targets",
+          "last_trade"
+        ],
+        "title": "MarketStrategy",
         "type": "object"
       },
       "MarketTimes": {
@@ -594,6 +678,16 @@
             "title": "Db Version",
             "type": "string"
           },
+          "fx": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FxPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "markets": {
             "additionalProperties": {
               "$ref": "#/components/schemas/MarketTimes"
@@ -611,6 +705,13 @@
             "title": "Runs",
             "type": "array"
           },
+          "strategy": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MarketStrategy"
+            },
+            "title": "Strategy",
+            "type": "object"
+          },
           "trading": {
             "$ref": "#/components/schemas/Trading"
           }
@@ -620,6 +721,8 @@
           "paused",
           "markets",
           "runs",
+          "strategy",
+          "fx",
           "db_version"
         ],
         "title": "Status",

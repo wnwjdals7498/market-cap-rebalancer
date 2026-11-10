@@ -17,7 +17,7 @@ export const settings: Settings = {
     fx_spread: 0.0025,
     rank_weights: [50, 30, 20, 0, 0],
     short_bond_pct: 100,
-    trade_every: 'week',
+    trade_every: 'day',
     fx_band_pp: 5,
     fx_enabled: true,
     fx_wait_days: 3,
@@ -76,6 +76,16 @@ export const status: Status = {
       status: 'OK', detail: null,
     },
   ],
+  strategy: {
+    KR: { ranking: [], confirmed: [], targets: {}, last_trade: null },
+    US: {
+      ranking: ['AAPL', 'NVDA', 'MSFT'],
+      confirmed: ['AAPL', 'NVDA', 'MSFT'],
+      targets: { AAPL: 0.3, SHY: 0.4 },
+      last_trade: '2026-11-09',
+    },
+  },
+  fx: null,
   db_version: '1',
 }
 

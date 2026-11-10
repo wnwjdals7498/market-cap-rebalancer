@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { Client } from '../api/client'
-import type { Limit, Settings, Snapshot } from '../api/types'
+import type { ConfigValue, Limit, Settings, Snapshot } from '../api/types'
 import { SaveNotice, useSave } from '../useSave'
 
 interface Props {
@@ -10,42 +10,106 @@ interface Props {
   onUnauthorized: () => void
 }
 
-/** 숫자 입력으로 편집하는 항목. 그 밖의 타입은 편집 화면이 생기기 전까지 읽기 전용으로만 보여 준다. */
-function isNumeric(limit: Limit | undefined): limit is Limit & { min: number; max: number } {
-  return (limit?.type === 'int' || limit?.type === 'float') && limit.min != null && limit.max != null
-}
+/** 입력 중인 값. 숫자·문자열은 문자열 그대로, 체크박스는 boolean, 여러 칸 항목은 칸마다 문자열. */
+type Draft = string | boolean | string[]
 
-function display(value: Settings['config'][string]): string {
+const EVERY_LABEL: Record<string, string> = { day: '일간', week: '주간', month: '월간' }
+const SLOTS = 5
+
+function display(value: ConfigValue | Draft | undefined): string {
   return Array.isArray(value) ? value.join(', ') : String(value)
 }
 
-function validate(raw: string, limit: Limit & { min: number; max: number }): string | null {
-  const n = Number(raw)
-  if (raw.trim() === '' || !Number.isFinite(n)) return '숫자를 입력하세요'
-  if (limit.type === 'int' && !Number.isInteger(n)) return '정수만 가능합니다'
-  if (n < limit.min || n > limit.max) return `${limit.min} ~ ${limit.max}`
-  return null
+/** 서버 값 → 입력 칸 초기값 */
+function initial(value: ConfigValue): Draft {
+  if (Array.isArray(value)) return value.map(String)
+  if (typeof value === 'boolean') return value
+  return String(value)
+}
+
+function sum(values: string[]): number {
+  return values.reduce((total, v) => total + (Number(v) || 0), 0)
+}
+
+function same(a: ConfigValue, b: ConfigValue): boolean {
+  return Array.isArray(a) && Array.isArray(b) ? a.length === b.length && a.every((v, i) => v === b[i]) : a === b
+}
+
+function range(limit: Limit): string {
+  return `${limit.min ?? ''} ~ ${limit.max ?? ''}`
+}
+
+/** 입력값 하나를 검사해 서버로 보낼 값을 만든다. 서버도 다시 검증한다(여기서는 저장 전 안내만). */
+function parse(draft: Draft, limit: Limit): { value: ConfigValue } | { problem: string } {
+  switch (limit.type) {
+    case 'int':
+    case 'float': {
+      const raw = String(draft)
+      const n = Number(raw)
+      if (raw.trim() === '' || !Number.isFinite(n)) return { problem: '숫자를 입력하세요' }
+      if (limit.type === 'int' && !Number.isInteger(n)) return { problem: '정수만 가능합니다' }
+      if (n < (limit.min ?? -Infinity) || n > (limit.max ?? Infinity)) return { problem: range(limit) }
+      return { value: n }
+    }
+    case 'bool':
+      return { value: draft === true }
+    case 'choice':
+      return limit.options?.includes(String(draft)) ? { value: String(draft) } : { problem: '선택하세요' }
+    case 'weights': {
+      const cells = draft as string[]
+      const numbers = cells.map((c) => Number(c))
+      if (cells.some((c) => c.trim() === '') || numbers.some((n) => !Number.isFinite(n))) {
+        return { problem: '숫자를 입력하세요' }
+      }
+      if (numbers.some((n) => n < (limit.min ?? 0) || n > (limit.max ?? 100))) return { problem: range(limit) }
+      const total = sum(cells)
+      if (Math.abs(total - 100) > 1e-6) return { problem: `합계가 100이어야 합니다 (현재 ${total})` }
+      return { value: numbers }
+    }
+    case 'tickers': {
+      const names = (draft as string[]).map((t) => t.trim().toUpperCase())
+      if (names.some((t) => t === '')) return { problem: `종목 ${SLOTS}개를 입력하세요` }
+      if (new Set(names).size !== names.length) return { problem: '중복된 종목이 있습니다' }
+      return { value: names }
+    }
+    case 'ticker': {
+      const name = String(draft).trim().toUpperCase()
+      return name === '' ? { problem: '종목 코드를 입력하세요' } : { value: name }
+    }
+  }
 }
 
 export function StrategyPanel({ client, settings, onChange, onUnauthorized }: Props) {
   const { save, busy, error, saved } = useSave(client, onUnauthorized)
-  const [drafts, setDrafts] = useState<Record<string, string>>({})
-  const fields = settings.editable.filter((k) => isNumeric(settings.limits[k]))
+  const [drafts, setDrafts] = useState<Record<string, Draft>>({})
+  const fields = settings.editable.filter((k) => settings.limits[k] && k in settings.config)
   const readOnly = Object.keys(settings.config).filter((k) => !fields.includes(k))
 
-  const changes: Record<string, number> = {}
+  const changes: Record<string, ConfigValue> = {}
   const problems: Record<string, string> = {}
   for (const key of fields) {
-    const draft = drafts[key]
-    if (draft === undefined) continue
-    const limit = settings.limits[key]
-    if (!isNumeric(limit)) continue
-    const problem = validate(draft, limit)
-    if (problem) problems[key] = problem
-    else if (Number(draft) !== settings.config[key]) changes[key] = Number(draft)
+    if (drafts[key] === undefined) continue
+    const result = parse(drafts[key], settings.limits[key])
+    if ('problem' in result) problems[key] = result.problem
+    else if (!same(result.value, settings.config[key])) changes[key] = result.value
   }
   const changedKeys = Object.keys(changes)
   const canSave = changedKeys.length > 0 && Object.keys(problems).length === 0 && !busy
+
+  function edit(key: string, draft: Draft) {
+    setDrafts({ ...drafts, [key]: draft })
+  }
+
+  function cells(key: string): string[] {
+    const draft = drafts[key] ?? initial(settings.config[key])
+    return Array.isArray(draft) ? draft : []
+  }
+
+  function editCell(key: string, index: number, value: string) {
+    const next = cells(key).slice()
+    next[index] = value
+    edit(key, next)
+  }
 
   async function submit() {
     const next = await save({ config: changes })
@@ -55,6 +119,68 @@ export function StrategyPanel({ client, settings, onChange, onUnauthorized }: Pr
     }
   }
 
+  function input(key: string, limit: Limit) {
+    const value = drafts[key] ?? initial(settings.config[key])
+    const id = `cfg-${key}`
+    switch (limit.type) {
+      case 'int':
+      case 'float':
+        return (
+          <input
+            id={id}
+            type="number"
+            inputMode="decimal"
+            min={limit.min ?? undefined}
+            max={limit.max ?? undefined}
+            step={limit.type === 'int' ? 1 : 'any'}
+            value={String(value)}
+            aria-invalid={key in problems}
+            onChange={(e) => edit(key, e.target.value)}
+          />
+        )
+      case 'bool':
+        return <input id={id} type="checkbox" checked={value === true} onChange={(e) => edit(key, e.target.checked)} />
+      case 'choice':
+        return (
+          <select id={id} value={String(value)} onChange={(e) => edit(key, e.target.value)}>
+            {(limit.options ?? []).map((o) => (
+              <option key={o} value={o}>{key === 'trade_every' ? (EVERY_LABEL[o] ?? o) : o}</option>
+            ))}
+          </select>
+        )
+      case 'ticker':
+        return (
+          <input id={id} type="text" value={String(value)} aria-invalid={key in problems}
+                 onChange={(e) => edit(key, e.target.value)} />
+        )
+      case 'weights':
+      case 'tickers':
+        return (
+          <div className="cells" role="group" aria-labelledby={`${id}-label`}>
+            {cells(key).map((cell, i) => (
+              <input
+                key={i}
+                type={limit.type === 'weights' ? 'number' : 'text'}
+                inputMode={limit.type === 'weights' ? 'decimal' : undefined}
+                step={limit.type === 'weights' ? 'any' : undefined}
+                aria-label={limit.type === 'weights' ? `${i + 1}위 비율` : `${limit.label} ${i + 1}`}
+                value={cell}
+                aria-invalid={key in problems}
+                onChange={(e) => editCell(key, i, e.target.value)}
+              />
+            ))}
+          </div>
+        )
+    }
+  }
+
+  function hint(key: string, limit: Limit) {
+    if (problems[key]) return problems[key]
+    if (limit.type === 'int' || limit.type === 'float') return range(limit)
+    if (limit.type === 'weights') return `합계 ${sum(cells(key))} / 100`
+    return ''
+  }
+
   return (
     <section className="card">
       <h2>전략 파라미터</h2>
@@ -62,22 +188,12 @@ export function StrategyPanel({ client, settings, onChange, onUnauthorized }: Pr
       <div className="fields">
         {fields.map((key) => {
           const limit = settings.limits[key]
-          if (!isNumeric(limit)) return null
+          const wide = limit.type === 'weights' || limit.type === 'tickers'
           return (
-            <div className="field" key={key}>
-              <label htmlFor={`cfg-${key}`}>{key}</label>
-              <input
-                id={`cfg-${key}`}
-                type="number"
-                inputMode="decimal"
-                min={limit.min}
-                max={limit.max}
-                step={limit.type === 'int' ? 1 : 'any'}
-                value={drafts[key] ?? display(settings.config[key])}
-                aria-invalid={key in problems}
-                onChange={(e) => setDrafts({ ...drafts, [key]: e.target.value })}
-              />
-              <span className="hint">{problems[key] ?? `${limit.min} ~ ${limit.max}`}</span>
+            <div className={wide ? 'field wide' : 'field'} key={key}>
+              <label id={`cfg-${key}-label`} htmlFor={`cfg-${key}`}>{limit.label}</label>
+              {input(key, limit)}
+              <span className="hint">{hint(key, limit)}</span>
             </div>
           )
         })}
@@ -88,7 +204,7 @@ export function StrategyPanel({ client, settings, onChange, onUnauthorized }: Pr
           <h3>바뀐 항목</h3>
           <ul>
             {changedKeys.map((k) => (
-              <li key={k}>{k}: {display(settings.config[k])} → {changes[k]}</li>
+              <li key={k}>{settings.limits[k].label}: {display(settings.config[k])} → {display(changes[k])}</li>
             ))}
           </ul>
         </div>

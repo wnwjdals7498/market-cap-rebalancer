@@ -98,13 +98,86 @@ describe('settings UI', () => {
       'PATCH /api/v1/settings': () => json({ detail: 'stock_pct 는 0~100 사이여야 합니다' }, 400),
     })
     render(<App />)
-    const input = await screen.findByLabelText('stock_pct')
+    const input = await screen.findByLabelText('주식 비중 (%)')
     await userEvent.clear(input)
     await userEvent.type(input, '70')
     await userEvent.click(screen.getByRole('button', { name: '저장' }))
     await waitFor(() => expect(patchCalls(fetchFn)).toHaveLength(1))
     expect(JSON.parse(String(patchCalls(fetchFn)[0][1]?.body))).toEqual({ config: { stock_pct: 70 } })
     expect(await screen.findByRole('alert')).toHaveTextContent('stock_pct 는 0~100 사이여야 합니다')
+  })
+
+  it('weights editor blocks save until sum is 100', async () => {
+    sessionStorage.setItem('mcr_token', 't')
+    const fetchFn = stubFetch({ ...defaultRoutes(), 'PATCH /api/v1/settings': () => json(settings) })
+    render(<App />)
+    const first = await screen.findByLabelText('1위 비율')
+    const save = screen.getByRole('button', { name: '저장' })
+    await userEvent.clear(first)
+    await userEvent.type(first, '40')
+    expect(screen.getByText(/합계가 100이어야 합니다 \(현재 90\)/)).toBeInTheDocument()
+    expect(save).toBeDisabled()
+
+    await userEvent.clear(screen.getByLabelText('4위 비율'))
+    await userEvent.type(screen.getByLabelText('4위 비율'), '10')
+    expect(save).toBeEnabled()
+    await userEvent.click(save)
+    await waitFor(() => expect(patchCalls(fetchFn)).toHaveLength(1))
+    expect(JSON.parse(String(patchCalls(fetchFn)[0][1]?.body))).toEqual({ config: { rank_weights: [40, 30, 20, 10, 0] } })
+  })
+
+  it('trade_every select sends week', async () => {
+    sessionStorage.setItem('mcr_token', 't')
+    const fetchFn = stubFetch({ ...defaultRoutes(), 'PATCH /api/v1/settings': () => json(settings) })
+    render(<App />)
+    const select = await screen.findByLabelText('매매 주기')
+    expect(select).toHaveValue('day')
+    expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual(['일간', '주간', '월간'])
+    await userEvent.selectOptions(select, '주간')
+    await userEvent.click(screen.getByRole('button', { name: '저장' }))
+    await waitFor(() => expect(patchCalls(fetchFn)).toHaveLength(1))
+    expect(JSON.parse(String(patchCalls(fetchFn)[0][1]?.body))).toEqual({ config: { trade_every: 'week' } })
+  })
+
+  it('edits tickers and booleans and sends only the changed keys', async () => {
+    sessionStorage.setItem('mcr_token', 't')
+    const fetchFn = stubFetch({ ...defaultRoutes(), 'PATCH /api/v1/settings': () => json(settings) })
+    render(<App />)
+    await userEvent.click(await screen.findByLabelText('환전 안내 사용'))
+    const bond = screen.getByLabelText('미국 단기채')
+    await userEvent.clear(bond)
+    await userEvent.type(bond, 'bil')
+    const last = screen.getByLabelText('미국 주식 후보 5')
+    await userEvent.clear(last)
+    await userEvent.type(last, 'meta')
+    await userEvent.click(screen.getByRole('button', { name: '저장' }))
+    await waitFor(() => expect(patchCalls(fetchFn)).toHaveLength(1))
+    expect(JSON.parse(String(patchCalls(fetchFn)[0][1]?.body))).toEqual({
+      config: {
+        fx_enabled: false,
+        us_short_bond: 'BIL',
+        us_universe: ['AAPL', 'NVDA', 'MSFT', 'GOOGL', 'META'],
+      },
+    })
+  })
+
+  it('shows strategy state and the status fx plan', async () => {
+    stubFetch({
+      'GET /api/v1/status': () => json({
+        ...status,
+        fx: { from_market: 'US', amount: 9000, currency: 'USD', created: '2026-11-10', ready: null },
+      }),
+    })
+    render(<StatusPanel client={createClient('t')} onUnauthorized={() => {}} />)
+    expect(await screen.findAllByText('AAPL > NVDA > MSFT', { selector: 'td' })).toHaveLength(2) // ranking and confirmed
+    expect(screen.getByText('SHY 40.0%, AAPL 30.0%')).toBeInTheDocument()
+    expect(screen.getByText(/미국 포켓 \$9,000 환전 필요 \(생성 2026-11-10\), 현금 확보 중/)).toBeInTheDocument()
+  })
+
+  it('status shows fx plan as none when there is no plan', async () => {
+    stubFetch({ 'GET /api/v1/status': () => json(status) })
+    render(<StatusPanel client={createClient('t')} onUnauthorized={() => {}} />)
+    expect(await screen.findByText('없음', { selector: 'p' })).toBeInTheDocument()
   })
 
   it('renders KST times for each market', async () => {

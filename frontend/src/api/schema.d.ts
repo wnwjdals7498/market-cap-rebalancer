@@ -77,6 +77,19 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** FxPlan */
+        FxPlan: {
+            /** Amount */
+            amount: number;
+            /** Created */
+            created: string;
+            /** Currency */
+            currency: string;
+            /** From Market */
+            from_market: string;
+            /** Ready */
+            ready: string | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -114,6 +127,19 @@ export interface components {
             old: string | null;
             /** Source */
             source: string;
+        };
+        /** MarketStrategy */
+        MarketStrategy: {
+            /** Confirmed */
+            confirmed: string[];
+            /** Last Trade */
+            last_trade: string | null;
+            /** Ranking */
+            ranking: string[];
+            /** Targets */
+            targets: {
+                [key: string]: number;
+            };
         };
         /** MarketTimes */
         MarketTimes: {
@@ -237,6 +263,7 @@ export interface components {
         Status: {
             /** Db Version */
             db_version: string;
+            fx: components["schemas"]["FxPlan"] | null;
             /** Markets */
             markets: {
                 [key: string]: components["schemas"]["MarketTimes"];
@@ -244,6 +271,10 @@ export interface components {
             paused: components["schemas"]["Paused"];
             /** Runs */
             runs: components["schemas"]["Run"][];
+            /** Strategy */
+            strategy: {
+                [key: string]: components["schemas"]["MarketStrategy"];
+            };
             trading: components["schemas"]["Trading"];
         };
         /** Trading */

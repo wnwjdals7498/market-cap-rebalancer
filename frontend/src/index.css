@@ -45,6 +45,9 @@ h3 { font-size: 0.95rem; margin: 16px 0 4px; }
 .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; flex-wrap: wrap; }
 .fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-bottom: 12px; }
 .field { display: flex; flex-direction: column; gap: 2px; }
+.field.wide { grid-column: 1 / -1; }
+.cells { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+input[type='checkbox'] { width: 18px; height: 18px; margin: 4px 0; }
 input[type='number'], input[type='text'], input[type='password'], select {
   font: inherit; padding: 6px 8px; color: var(--fg); background: var(--bg);
   border: 1px solid var(--line); border-radius: 6px; width: 100%;

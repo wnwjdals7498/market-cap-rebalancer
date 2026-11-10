@@ -246,6 +246,13 @@ def previous_mcaps(conn: sqlite3.Connection, market: str, before: str) -> dict[s
         (market, row["d"]))}
 
 
+def latest_rankings(conn: sqlite3.Connection, market: str) -> list[str]:
+    """Tickers of the most recent ranking, best first."""
+    return [r["ticker"] for r in conn.execute(
+        "SELECT ticker FROM rankings WHERE market = ? AND session_date = "
+        "(SELECT MAX(session_date) FROM rankings WHERE market = ?) ORDER BY rank", (market, market))]
+
+
 def save_rankings(conn: sqlite3.Connection, session_date: str, market: str, ranked: list[tuple[str, float]]) -> None:
     with conn:
         conn.execute("DELETE FROM rankings WHERE session_date = ? AND market = ?", (session_date, market))
@@ -309,6 +316,13 @@ def save_targets(conn: sqlite3.Connection, session_date: str, market: str,
         conn.execute("DELETE FROM targets WHERE session_date = ? AND market = ?", (session_date, market))
         conn.executemany("INSERT INTO targets VALUES (?, ?, ?, ?, ?)",
                          [(session_date, market, t, w, p) for t, (w, p) in targets.items()])
+
+
+def latest_targets(conn: sqlite3.Connection, market: str) -> dict[str, float]:
+    """Weights of the most recent session that planned any trade."""
+    return {r["ticker"]: r["weight"] for r in conn.execute(
+        "SELECT ticker, weight FROM targets WHERE market = ? AND session_date = "
+        "(SELECT MAX(session_date) FROM targets WHERE market = ?)", (market, market))}
 
 
 def load_targets(conn: sqlite3.Connection, session_date: str, market: str) -> dict[str, tuple[float, float]]:
