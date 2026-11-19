@@ -122,7 +122,9 @@ def test_rerun_is_noop_and_force_recomputes_from_previous_day(env):
     assert "already done" in jobs.run_signal(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 11:50", tz=NY))
     jobs.run_signal(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 11:50", tz=NY), force=True)
     assert db.load_rank_state(conn, "US", "2026-10-27").confirmed[0] == "AAPL"
-    assert len(db.load_targets(conn, "2026-10-26", "US")) == 4  # same targets, and the executed trade is not repeated
+    assert not db.load_targets(conn, "2026-10-26", "US")  # holdings now match the target
+    assert "already done" in jobs.run_execute(conn, US, "2026-10-26", src, cfg,
+                                              pd.Timestamp("2026-10-26 12:50", tz=NY))
 
 
 def test_stale_quotes_fail_the_run(env):
@@ -587,7 +589,8 @@ def test_fx_plan_cleared_when_ratio_recovers(fx_env, no_real_alerts):
 def test_fx_reserve_only_for_the_source_market(fx_env):
     conn, src, cfg = fx_env
     db.set_setting(conn, "fx:plan", {"from": "KR", "amount": 5_000_000.0, "created": "2026-10-27", "ready": None})
-    run_day(conn, src, cfg, "2026-10-27", TOP3)
+    swapped = {"AAPL": 4900, "NVDA": 5000, "MSFT": 4800}
+    run_day(conn, src, cfg, "2026-10-27", swapped)
     assert sum(w for w, _ in db.load_targets(conn, "2026-10-27", "US").values()) == pytest.approx(1.0)
     db.set_setting(conn, "fx:plan", {"from": "US", "amount": 10_000.0, "created": "2026-10-27", "ready": "2026-10-28"})
     run_day(conn, src, replace(cfg, fx_enabled=False), "2026-10-28", TOP3)  # FX switched off: nothing reserved
@@ -603,7 +606,7 @@ def test_ready_plan_keeps_cash_reserved_on_daily_trade_days(fx_env, no_real_aler
 
     units = run_day(conn, src, cfg, "2026-10-28", TOP3)  # the next daily trade day: the cash stays put
     assert units[CASH] == pytest.approx(10_000)
-    assert sum(w for w, _ in db.load_targets(conn, "2026-10-28", "US").values()) == pytest.approx(0.9)
+    assert not db.load_targets(conn, "2026-10-28", "US")  # already matches the FX-adjusted target
     no_real_alerts.clear()
     report_at(conn, "2026-10-29", force=True)
     plan = db.get_setting(conn, "fx:plan")  # still waiting, not mistaken for an exchange
@@ -699,7 +702,7 @@ def test_exchanged_ready_plan_is_not_rebuilt_by_the_next_daily_signal(fx_env, no
     units = db.latest_positions(conn, "US")[1] | {CASH: 0.0}  # the user exchanged the cash
     db.save_positions(conn, "2026-10-28", "US", units, {t: 100.0 for t in units})
     after = run_day(conn, src, cfg, "2026-10-29", TOP3)
-    assert sum(w for w, _ in db.load_targets(conn, "2026-10-29", "US").values()) == pytest.approx(1.0)
+    assert not db.load_targets(conn, "2026-10-29", "US")  # no further sale is needed
     assert {t: q for t, q in after.items() if t != CASH} == {t: q for t, q in units.items() if t != CASH}  # nothing sold
     report_at(conn, "2026-10-30", force=True)
     assert db.get_setting(conn, "fx:plan") is None
@@ -1089,3 +1092,51 @@ def test_pending_reserve_deficit_threshold(env, monkeypatch, reserve, expected_p
     monkeypatch.setattr(jobs, "execute", lambda *args, **kwargs: [])
     jobs.run_execute(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 12:50", tz=NY), broker=broker)
     assert control.cash_state(conn)["pending"]["US"] is expected_pending
+
+
+def test_live_band_skips_trade_inside_band(env):
+    conn, src, _ = env
+    cfg = Config(us_fee=0, trade_every="week", band_pp=3, fx_enabled=False)
+    units = {CASH: 20_000, "AAPL": 300, "NVDA": 180, "MSFT": 120, "SHY": 400}
+    db.save_positions(conn, "2026-10-26", "US", units, {t: 100 for t in units if t != CASH})
+    db.set_setting(conn, "cash", {"US": 20_000})
+    set_day(src, "2026-10-26", TOP3)
+    signal = jobs.run_signal(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 11:50", tz=NY))
+    assert "no trade (band)" in signal
+    assert not db.load_targets(conn, "2026-10-26", "US")
+    src.quote_time = pd.Timestamp("2026-10-26 12:40", tz=NY)
+    result = jobs.run_execute(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 12:50", tz=NY))
+    assert result.endswith("OK: no orders (band)")
+    assert conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 0
+    set_day(src, "2026-10-27", TOP3)
+    signal = jobs.run_signal(conn, US, "2026-10-27", src, cfg, pd.Timestamp("2026-10-27 11:50", tz=NY))
+    assert "no trade (week)" in signal
+
+
+def test_live_band_trades_outside_band(env):
+    conn, src, _ = env
+    cfg = Config(us_fee=0, trade_every="week", band_pp=3, step_pct=100, fx_enabled=False)
+    units = {CASH: 0, "AAPL": 400, "NVDA": 80, "MSFT": 120, "SHY": 400}
+    db.save_positions(conn, "2026-10-26", "US", units, {t: 100 for t in units if t != CASH})
+    set_day(src, "2026-10-26", TOP3)
+    signal = jobs.run_signal(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 11:50", tz=NY))
+    assert "target " in signal
+    src.quote_time = pd.Timestamp("2026-10-26 12:40", tz=NY)
+    result = jobs.run_execute(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 12:50", tz=NY))
+    assert "SELL" in result and "BUY" in result
+
+
+def test_pending_cash_ignores_band(env):
+    conn, src, _ = env
+    cfg = Config(us_fee=0, trade_every="week", band_pp=50, fx_enabled=False)
+    units = {CASH: 20_000, "AAPL": 300, "NVDA": 180, "MSFT": 120, "SHY": 400}
+    db.save_positions(conn, "2026-10-26", "US", units, {t: 100 for t in units if t != CASH})
+    db.set_setting(conn, "cash", {"US": 20_000})
+    control.cash_command(conn, "US", "invest", 10_000, "cli")
+    set_day(src, "2026-10-26", TOP3)
+    signal = jobs.run_signal(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 11:50", tz=NY))
+    assert "target " in signal
+    src.quote_time = pd.Timestamp("2026-10-26 12:40", tz=NY)
+    result = jobs.run_execute(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 12:50", tz=NY))
+    assert "BUY" in result
+    assert db.latest_positions(conn, "US")[1][CASH] < 20_000

@@ -36,8 +36,8 @@ from control import FX_PLAN, load_config
 from execution import ExecParams, execute, limit_price
 from markets import MARKETS, Market, current_session, session_times
 from sources import FallbackSource, Quote, Source, YFinanceSource
-from strategy import (CASH, Config, RankState, fx_amount, fx_gap, plan_moves, pocket_value, pocket_weights,
-                      stock_weights, trade_cost, trade_due, update_ranking)
+from strategy import (CASH, Config, RankState, fx_amount, fx_gap, needs_moves, plan_moves, pocket_value,
+                      pocket_weights, stock_weights, trade_cost, trade_due, update_ranking)
 
 log = logging.getLogger("mcr")
 
@@ -47,6 +47,7 @@ MCAP_JUMP = 0.40                       # day-over-day market-cap move treated as
 
 
 NO_TRADE = report.NO_TRADE  # execute detail on days outside the trade cadence (not worth an alert)
+NO_TRADE_BAND = "no trade (band)"
 
 
 class JobError(RuntimeError):
@@ -286,17 +287,24 @@ def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source,
             tail = f"no trade ({cfg.trade_every})"
         else:
             weights = pocket_weights(stock_weights(confirmed, cfg), mkt.code, cfg)
-            target = plan_moves(units, prices, weights, cfg, investable,
-                                cash_flow=abs(units.get(CASH, 0.0)) if pending else 0.0)
-            if value > 0:
-                db.save_targets(conn, session, mkt.code, {t: (v / value, prices[t]) for t, v in target.items()})
-                tail = "target " + ", ".join(f"{t} {v / value:.1%}"
-                                             for t, v in sorted(target.items(), key=lambda kv: -kv[1]))
+            # FX-reserved cash scales the target weights just as in the backtest.
+            check_weights = ({t: w * investable / value for t, w in weights.items()}
+                             if value > 0 else weights)
+            if not pending and not needs_moves(units, prices, check_weights, cfg):
+                db.save_targets(conn, session, mkt.code, {})
+                tail = NO_TRADE_BAND
             else:
-                # A fully reserved account still needs a target to liquidate its holdings.
-                held_targets = {t: (0.0, prices[t]) for t in units if t != CASH and units[t] > 0}
-                db.save_targets(conn, session, mkt.code, held_targets if pending else {})
-                tail = "target none (empty pocket)"
+                target = plan_moves(units, prices, weights, cfg, investable,
+                                    cash_flow=abs(units.get(CASH, 0.0)) if pending else 0.0)
+                if value > 0:
+                    db.save_targets(conn, session, mkt.code, {t: (v / value, prices[t]) for t, v in target.items()})
+                    tail = "target " + ", ".join(f"{t} {v / value:.1%}"
+                                                 for t, v in sorted(target.items(), key=lambda kv: -kv[1]))
+                else:
+                    # A fully reserved account still needs a target to liquidate its holdings.
+                    held_targets = {t: (0.0, prices[t]) for t in units if t != CASH and units[t] > 0}
+                    db.save_targets(conn, session, mkt.code, held_targets if pending else {})
+                    tail = "target none (empty pocket)"
         done = [t for t in retired if not units.get(t)]
         if done:
             control.drop_retired(conn, mkt.code, done)
@@ -350,6 +358,11 @@ def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source
         if not targets:
             balance = broker.balance(mkt.code) if broker else db.latest_positions(conn, mkt.code)[1]
             observe_cash(conn, mkt.code, balance.get(CASH, 0.0), now, cfg)
+            signal = conn.execute("SELECT detail FROM runs WHERE job = 'signal' AND market = ? AND session_date = ?",
+                                  (mkt.code, session)).fetchone()
+            if (signal and NO_TRADE_BAND in (signal["detail"] or "").split("; ")
+                    and not control.cash_state(conn)["pending"][mkt.code]):
+                return "OK", "no orders (band)"
             return "SKIPPED", NO_TRADE
         retired = retired_of(conn, mkt)
         allowed = set(cfg.universe(mkt.code)) | set(cfg.etfs(mkt.code)) | set(retired)
