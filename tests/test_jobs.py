@@ -1183,3 +1183,36 @@ def test_unknown_pool_ticker_uses_screen_name(env):
     assert calls == [("us", 15)]
     assert db.get_setting(conn, "names")["ORCL"] == "Oracle"
     assert report.name("ORCL", db.get_setting(conn, "names")) == "Oracle(ORCL)"
+
+
+def test_report_shows_reserved_cash_and_invested_pnl(env):
+    import report
+    import webreport
+    conn, _, _ = env
+    db.save_positions(conn, "2026-10-26", "KR", {CASH: 1_000_000}, {})
+    db.save_positions(conn, "2026-10-26", "US", {CASH: 1000}, {})
+    db.set_setting(conn, "cash", {"KR": 200_000, "US": 100})
+    db.set_setting(conn, "cash:principal", {"KR": 700_000, "US": 1000})
+    text, total = report.build_report(conn, "2026-10-27", 1400)
+    assert total == 2_400_000
+    assert "총자산 ₩2,400,000" in text and "보관 현금 합계 ₩340,000" in text
+    assert "투자금 평가 ₩800,000 / 보관 현금 ₩200,000 / 투자 손익 +₩100,000 (원금 ₩700,000)" in text
+    assert "투자금 평가 $900.00 / 보관 현금 $100.00 / 투자 손익 -$100.00 (원금 $1,000.00)" in text
+    page = webreport.build_html(conn, usdkrw=1400)
+    assert '보관 현금</div><div class="v">₩200,000' in page
+    assert '보관 현금</div><div class="v">$100.00' in page
+
+
+def test_report_cash_without_principal_and_zero_principal(env):
+    import report
+    conn, _, _ = env
+    db.save_positions(conn, "2026-10-26", "KR", {CASH: 1000}, {})
+    db.save_positions(conn, "2026-10-26", "US", {CASH: 100}, {})
+    db.set_setting(conn, "cash", {"KR": 200})
+    text, _ = report.build_report(conn, "2026-10-27", None)
+    assert "투자금 평가 ₩800 / 보관 현금 ₩200 / 투자 손익 기록 없음 (원금 기록 없음)" in text
+    assert "투자금 평가 $" not in text
+    assert "보관 현금 합계" not in text  # no exchange rate
+    db.set_setting(conn, "cash:principal", {"US": 0})
+    text, _ = report.build_report(conn, "2026-10-27", 1400)
+    assert "투자금 평가 $100.00 / 보관 현금 $0.00 / 투자 손익 +$100.00 (원금 $0.00)" in text

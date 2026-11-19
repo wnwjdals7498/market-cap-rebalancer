@@ -52,7 +52,7 @@ npm run lint && npm run typecheck && npm test -- --run && npm run build
 | `report.py` | 일일 보고 텍스트 (SQLite 만 읽음) |
 | `webreport.py` | 웹 리포트 (단일 HTML, 인라인 SVG 차트, 로컬 서버: 읽기 전용, `/version` 폴링으로 자동 갱신) |
 | `frontend/` | 설정 웹 UI (React + Vite + TypeScript). `src/api/schema.d.ts` 는 `scripts/export_openapi.py` → `npm run gen:api` 생성물, `dist/` 는 git 에 넣지 않고 `api.py` 가 `/app/` 으로 서빙 |
-| `jobs.py` | CLI: init / signal / execute / tick / status / config / report / web. signal 은 매일 순위, 매매 주기에만 목표. 환전 계획(`fx_review`)은 일일 보고가 진행 |
+| `jobs.py` | CLI: init / signal / execute / tick / status / config / cash / report / web. signal 은 매일 순위, 매매 주기에만 목표. 환전 계획(`fx_review`)은 일일 보고가 진행 |
 | `scripts/`, `deploy/` | 자동 실행 등록: Windows 작업 스케줄러 / Linux systemd (`deploy/DEPLOY.md`) |
 
 - 전략 규칙을 바꾸면 `strategy.py` 만 고치고, 백테스트를 다시 돌려 `results/summary.md` 갱신, README 규칙 표 갱신까지 같은 커밋에. 백테스트와 실운용 규칙이 갈라지면 백테스트 결과가 의미를 잃는다.

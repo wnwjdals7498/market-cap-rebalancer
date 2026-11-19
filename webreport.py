@@ -223,7 +223,10 @@ def market_card(conn: sqlite3.Connection, market: str) -> str:
     trade = next((l.strip() for l in lines if l.strip().startswith("체결")), "")
     rank = next((l.strip() for l in lines if l.strip().startswith("순위")), "")
     warn = "".join(f'<div class="serious">⚠ {esc(w)}</div>' for w in warns)
-    return (f'<section class="card"><h2>{head}</h2>{warn}<h3>보유</h3>{holdings}'
+    reserve = control.cash_state(conn)["reserve"][market]
+    cash_tile = (f'<div class="tiles"><div class="tile"><div class="k">보관 현금</div>'
+                 f'<div class="v">{esc(report.money(reserve, market))}</div></div></div>')
+    return (f'<section class="card"><h2>{head}</h2>{warn}{cash_tile}<h3>보유</h3>{holdings}'
             f'<h3>최근 체결</h3><div>{esc(trade)}</div><h3>시총 상위 3 추이</h3>'
             f'<div class="sub" style="margin:0 0 6px">{esc(rank)}</div>{chart}</section>')
 

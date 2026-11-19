@@ -89,6 +89,18 @@ def market_section(conn: sqlite3.Connection, market: str) -> tuple[list[str], fl
         head += (f" | 순위 {ranking} | 다음 매매 {EVERY.get(cfg.trade_every, cfg.trade_every)}"
                  f" | 대기 {st['streak']}/{cfg.confirm_days}일")
     lines = [head, f"  평가 {money(value, market)}"]
+    reserve = control.cash_state(conn)["reserve"][market]
+    principals = db.get_setting(conn, "cash:principal", {})
+    if reserve or market in principals:
+        invested = value - reserve
+        if market in principals:
+            principal = principals[market]
+            profit = invested - principal
+            sign = "+" if profit >= 0 else "-"
+            pnl = f"{sign}{money(abs(profit), market)} (원금 {money(principal, market)})"
+        else:
+            pnl = "기록 없음 (원금 기록 없음)"
+        lines.append(f"  투자금 평가 {money(invested, market)} / 보관 현금 {money(reserve, market)} / 투자 손익 {pnl}")
 
     tgt_session = _latest(conn, "targets", market)
     targets = {r["ticker"]: r["weight"] for r in conn.execute(
@@ -186,7 +198,10 @@ def build_report(conn: sqlite3.Connection, day: str, usdkrw: float | None,
             chg.append(f"직전 {pct(total / last['total'] - 1)}")
         if first and first.get("total"):
             chg.append(f"누적 {pct(total / first['total'] - 1)}")
-        out.append(f"총자산 ₩{total:,.0f}" + (f" ({', '.join(chg)})" if chg else ""))
+        reserve = control.cash_state(conn)["reserve"]
+        reserved_krw = reserve["KR"] + reserve["US"] * usdkrw
+        out.append(f"총자산 ₩{total:,.0f}" + (f" ({', '.join(chg)})" if chg else "")
+                   + f" / 보관 현금 합계 ₩{reserved_krw:,.0f}")
         out.append(f"  원화 {money(kr_val, 'KR')} · 달러 {money(us_val, 'US')} (환율 {usdkrw:,.1f})")
     else:
         out.append("총자산 환율 조회 실패 — 원화/달러 따로 표시")
