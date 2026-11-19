@@ -82,3 +82,16 @@ def test_backtest_renormalizes_etfs_before_listing():
     assert curve["total_krw"].notna().all()
     assert curve["KR:411060.KS"].iloc[:5].fillna(0).eq(0).all()
     assert curve["KR:411060.KS"].iloc[-1] > 0
+
+
+def test_backtest_counts_only_real_fx_moves():
+    md = make_md(5)
+    for frame in (md["close"], md["adj"]):
+        frame.loc[:, frame.columns != data.FX_TICKER] = 100.0
+        frame.loc[frame.index[2]:, "A"] = 200.0
+    cfg = Config(**{**CFG.__dict__, "stock_pct": 100, "rank_weights": (100, 0, 0, 0, 0),
+                    "trade_every": "day", "fx_enabled": True, "fx_band_pp": 1,
+                    "band_pp": 50, "step_pct": 5, "us_fee": 0, "kr_fee": 0, "kr_stock_sell_tax": 0})
+    result = backtest.run(md, cfg, "2024-01-01", "2024-01-05", 1e6)
+    assert result["trade_days"]["US"] == [date(2024, 1, 2)]
+    assert result["fx_moves"] == 0

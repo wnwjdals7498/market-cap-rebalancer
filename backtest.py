@@ -67,12 +67,13 @@ def run(md: dict[str, pd.DataFrame], cfg: Config, start: str, end: str | None,
         if plan is not None and plan["reserved"] is not None and plan["reserved"] < d:
             src, dst = plan["from"], "KR" if plan["from"] == "US" else "US"
             amount = min(plan["amount"], max(pockets[src].get(CASH, 0.0), 0.0))
-            fee = amount * k[src] * cfg.fx_spread
-            pockets[src][CASH] = pockets[src].get(CASH, 0.0) - amount
-            pockets[dst][CASH] = pockets[dst].get(CASH, 0.0) + (amount * k[src] - fee) / k[dst]
-            cost_krw += fee
-            traded_krw += amount * k[src]
-            fx_moves += 1
+            if amount > 0:
+                fee = amount * k[src] * cfg.fx_spread
+                pockets[src][CASH] = pockets[src].get(CASH, 0.0) - amount
+                pockets[dst][CASH] = pockets[dst].get(CASH, 0.0) + (amount * k[src] - fee) / k[dst]
+                cost_krw += fee
+                traded_krw += amount * k[src]
+                fx_moves += 1
             plan = None
 
         if plan is None and all(is_open.values()):
