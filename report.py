@@ -2,25 +2,52 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from collections import defaultdict
 
 import pandas as pd
 
 import control
+import db
 
-NAMES = {"005930.KS": "삼성전자", "000660.KS": "SK하이닉스", "373220.KS": "LG에너지솔루션",
-         "207940.KS": "삼성바이오로직스", "005380.KS": "현대차", "148070.KS": "국고채10년",
-         "402340.KS": "SK스퀘어", "114260.KS": "국고채3년", "385560.KS": "국고채30년",
-         "SHY": "SHY(단기채)", "TLT": "TLT(장기채)"}
+NAMES = {
+    "005930.KS": "삼성전자", "000660.KS": "SK하이닉스", "402340.KS": "SK스퀘어",
+    "373220.KS": "LG에너지솔루션", "005380.KS": "현대차", "207940.KS": "삼성바이오로직스",
+    "009150.KS": "삼성전기", "105560.KS": "KB금융", "068270.KS": "셀트리온",
+    "028260.KS": "삼성물산", "032830.KS": "삼성생명", "055550.KS": "신한지주",
+    "000270.KS": "기아", "006400.KS": "삼성SDI", "012450.KS": "한화에어로스페이스",
+    "114260.KS": "KODEX 국고채3년", "385560.KS": "RISE 국고채30년", "411060.KS": "ACE KRX금현물",
+    "069500.KS": "KODEX 200", "229200.KS": "KODEX 코스닥150", "148070.KS": "국고채10년",
+    "AAPL": "애플", "NVDA": "엔비디아", "MSFT": "마이크로소프트", "GOOG": "알파벳",
+    "AMZN": "아마존", "TSM": "TSMC", "SPCX": "스페이스X", "META": "메타", "AVGO": "브로드컴",
+    "TSLA": "테슬라", "LLY": "일라이릴리", "BRK-B": "버크셔해서웨이", "WMT": "월마트",
+    "SKHY": "SK하이닉스 미국상장", "JPM": "JP모건", "SHY": "미국 단기국채", "TLT": "미국 장기국채",
+    "IEF": "미국 중기국채", "GLD": "금 ETF", "QQQ": "나스닥100 ETF", "SPY": "S&P500 ETF",
+}
 EVERY = {"day": "일간", "week": "주간", "month": "월간"}
 NO_TRADE = "매매 주기 아님"  # execute detail on days outside the trade cadence; not a warning
 FLAGS = {"KR": "🇰🇷", "US": "🇺🇸"}
 WEEKDAYS = "월화수목금토일"
 
 
-def name(ticker: str) -> str:
-    return NAMES.get(ticker, ticker)
+def name(ticker: str, saved: dict[str, str] | None = None) -> str:
+    label = NAMES.get(ticker) or (saved or {}).get(ticker)
+    if not label or label == ticker:
+        return ticker
+    return label if ticker.endswith((".KS", ".KQ")) else f"{label}({ticker})"
+
+
+def display_names(conn: sqlite3.Connection) -> dict[str, str]:
+    saved = db.get_setting(conn, "names", {})
+    return {ticker: name(ticker, saved) for ticker in NAMES.keys() | saved.keys()}
+
+
+def replace_tickers(text: str, names: dict[str, str]) -> str:
+    if not names:
+        return text
+    pattern = r"(?<![A-Za-z0-9.\-])(?:" + "|".join(re.escape(t) for t in sorted(names, key=len, reverse=True)) + r")(?![A-Za-z0-9.\-])"
+    return re.sub(pattern, lambda match: names[match.group()], text)
 
 
 def money(v: float, market: str) -> str:
@@ -45,6 +72,7 @@ def _latest(conn: sqlite3.Connection, table: str, market: str, col: str = "sessi
 
 def market_section(conn: sqlite3.Connection, market: str) -> tuple[list[str], float | None, list[str]]:
     """(lines, pocket value in local currency, warnings)."""
+    names = db.get_setting(conn, "names", {})
     pos_date = _latest(conn, "positions", market, "date")
     if pos_date is None:
         return [f"{FLAGS[market]} {market} 기록 없음"], None, []
@@ -57,7 +85,7 @@ def market_section(conn: sqlite3.Connection, market: str) -> tuple[list[str], fl
                       (market,)).fetchone()
     if st:
         cfg = control.load_config(conn)
-        ranking = " > ".join(name(t) for t in json.loads(st["confirmed"])[:3])
+        ranking = " > ".join(name(t, names) for t in json.loads(st["confirmed"])[:3])
         head += (f" | 순위 {ranking} | 다음 매매 {EVERY.get(cfg.trade_every, cfg.trade_every)}"
                  f" | 대기 {st['streak']}/{cfg.confirm_days}일")
     lines = [head, f"  평가 {money(value, market)}"]
@@ -66,7 +94,7 @@ def market_section(conn: sqlite3.Connection, market: str) -> tuple[list[str], fl
     targets = {r["ticker"]: r["weight"] for r in conn.execute(
         "SELECT ticker, weight FROM targets WHERE market = ? AND session_date = ?", (market, tgt_session))}
     held = sorted((r for r in pos if r["ticker"] != "CASH"), key=lambda r: -r["value"])
-    parts = [f"{name(r['ticker'])} {r['value'] / value:.1%}" + (f"(목표 {targets[r['ticker']]:.0%})"
+    parts = [f"{name(r['ticker'], names)} {r['value'] / value:.1%}" + (f"(목표 {targets[r['ticker']]:.0%})"
                                                                 if r["ticker"] in targets else "")
              for r in held if value]
     cash = next((r["value"] for r in pos if r["ticker"] == "CASH"), 0.0)
@@ -87,12 +115,12 @@ def market_section(conn: sqlite3.Connection, market: str) -> tuple[list[str], fl
         for (t, side), (filled, notional, wanted, statuses) in agg.items():
             verb = "매수" if side == "BUY" else "매도"
             if statuses == {"PLANNED"}:
-                trades.append(f"{verb} {name(t)} {wanted}주 계획")
+                trades.append(f"{verb} {name(t, names)} {wanted}주 계획")
             elif filled:
-                trades.append(f"{verb} {name(t)} {filled}주 @{price(notional / filled, market)}"
+                trades.append(f"{verb} {name(t, names)} {filled}주 @{price(notional / filled, market)}"
                               + (f" ({filled}/{wanted})" if filled < wanted else ""))
             else:
-                trades.append(f"{verb} {name(t)} 미체결")
+                trades.append(f"{verb} {name(t, names)} 미체결")
         lines.append(f"  체결({ord_session}) " + " / ".join(trades))
     else:
         lines.append("  체결 없음")
@@ -101,7 +129,7 @@ def market_section(conn: sqlite3.Connection, market: str) -> tuple[list[str], fl
     ranks = conn.execute("SELECT ticker, mcap FROM rankings WHERE market = ? AND session_date = ? ORDER BY rank "
                          "LIMIT 3", (market, rk_session)).fetchall()
     if ranks:
-        txt = " > ".join(f"{name(r['ticker'])} {mcap(r['mcap'], market)}" for r in ranks)
+        txt = " > ".join(f"{name(r['ticker'], names)} {mcap(r['mcap'], market)}" for r in ranks)
         if len(ranks) > 1:
             txt += f" (1·2위 차 {ranks[0]['mcap'] / ranks[1]['mcap'] - 1:+.1%})"
         lines.append("  순위 " + txt)
@@ -110,7 +138,7 @@ def market_section(conn: sqlite3.Connection, market: str) -> tuple[list[str], fl
              for r in conn.execute("SELECT * FROM runs WHERE market = ? AND status IN ('FAILED','SKIPPED','PARTIAL',"
                                    "'RUNNING') AND session_date >= ? AND COALESCE(detail, '') != ? ORDER BY session_date, job",
                                    (market, pos_date, NO_TRADE))]
-    return lines, value, warns
+    return lines, value, [replace_tickers(w, display_names(conn)) for w in warns]
 
 
 def fetch_usdkrw() -> float:

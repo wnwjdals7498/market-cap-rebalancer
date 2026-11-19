@@ -21,6 +21,14 @@ def yf_fetch(region: str, count: int) -> list[dict]:
     return result["quotes"]
 
 
+class ScreenResult(list[str]):
+    """Ranked tickers with names from the same screening response."""
+    def __init__(self, quotes: list[dict]):
+        super().__init__(q["symbol"] for q in quotes)
+        self.names = {q["symbol"]: q.get("shortName") or q.get("longName") for q in quotes
+                      if isinstance(q.get("shortName") or q.get("longName"), str)}
+
+
 def screen_top(market: str, size: int, fetch: Callable[[str, int], list[dict]] | None = None) -> list[str]:
     """The `size` largest common stocks of `market` ("US" or "KR"), largest market cap first.
 
@@ -53,4 +61,4 @@ def screen_top(market: str, size: int, fetch: Callable[[str, int], list[dict]] |
     ranked = sorted(best.values(), key=lambda q: q["marketCap"], reverse=True)
     if len(ranked) < size:
         raise ScreenError(f"{market} screen returned {len(ranked)} usable stocks, need {size}")
-    return [q["symbol"] for q in ranked[:size]]
+    return ScreenResult(ranked[:size])

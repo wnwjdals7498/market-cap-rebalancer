@@ -2,6 +2,7 @@ import { vi } from 'vitest'
 import type { Settings, Status } from '../api/types'
 
 export const settings: Settings = {
+  names: {},
   trading: { broker: 'sim', submit: false, allow_real: false },
   paused: { KR: false, US: false },
   config: {
@@ -73,6 +74,7 @@ export const settings: Settings = {
 }
 
 export const status: Status = {
+  names: {},
   trading: settings.trading,
   paused: settings.paused,
   markets: {

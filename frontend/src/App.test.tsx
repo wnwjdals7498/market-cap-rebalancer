@@ -309,3 +309,20 @@ describe('settings UI', () => {
     expect(screen.getByText('11-10 14:50')).toBeInTheDocument()
   })
 })
+
+describe('stock names', () => {
+  it('shows stock names next to tickers', async () => {
+    sessionStorage.setItem('mcr_token', 't')
+    const names = { AAPL: '애플(AAPL)', NVDA: '엔비디아(NVDA)', MSFT: '마이크로소프트(MSFT)',
+      SHY: '미국 단기국채(SHY)', '229200.KS': 'KODEX 코스닥150' }
+    stubFetch({ ...defaultRoutes(),
+      'GET /api/v1/settings': () => json({ ...settings, names }),
+      'GET /api/v1/status': () => json({ ...status, names }),
+    })
+    render(<App />)
+    expect(await screen.findAllByText('애플(AAPL) > 엔비디아(NVDA) > 마이크로소프트(MSFT)')).toHaveLength(2)
+    expect(screen.getByText(/미국 단기국채\(SHY\) 40.0%/)).toBeInTheDocument()
+    expect(screen.getByText(/KODEX 코스닥150/)).toBeInTheDocument()
+    expect(screen.getByLabelText('한국 코스닥 ETF')).toHaveValue('229200.KS')
+  })
+})

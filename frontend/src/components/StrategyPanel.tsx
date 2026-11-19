@@ -218,6 +218,10 @@ export function StrategyPanel({ client, settings, onChange, onUnauthorized }: Pr
               <label id={`cfg-${key}-label`} htmlFor={`cfg-${key}`}>{limit.label}</label>
               {input(key, limit)}
               <span className="hint">{hint(key, limit)}</span>
+              {(limit.type === 'ticker' || limit.type === 'tickers') && (
+                <span className="hint">{splitTickers(String(drafts[key] ?? initial(settings.config[key], limit)))
+                  .map((ticker) => settings.names[ticker] ?? ticker).join(', ')}</span>
+              )}
             </div>
           )
         })}

@@ -570,6 +570,13 @@
             "title": "Limits",
             "type": "object"
           },
+          "names": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Names",
+            "type": "object"
+          },
           "paused": {
             "$ref": "#/components/schemas/Paused"
           },
@@ -578,6 +585,7 @@
           }
         },
         "required": [
+          "names",
           "trading",
           "paused",
           "config",
@@ -678,6 +686,13 @@
             "title": "Editable",
             "type": "array"
           },
+          "names": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Names",
+            "type": "object"
+          },
           "paused": {
             "$ref": "#/components/schemas/Paused"
           },
@@ -686,6 +701,7 @@
           }
         },
         "required": [
+          "names",
           "trading",
           "paused",
           "config",
@@ -717,6 +733,13 @@
             "title": "Markets",
             "type": "object"
           },
+          "names": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Names",
+            "type": "object"
+          },
           "paused": {
             "$ref": "#/components/schemas/Paused"
           },
@@ -739,6 +762,7 @@
           }
         },
         "required": [
+          "names",
           "trading",
           "paused",
           "markets",

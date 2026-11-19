@@ -202,3 +202,15 @@ def test_status_includes_strategy_and_fx(client, db_path):
                                      "ready": "2026-11-11", "exchange": 5200.5})
     conn.close()
     assert client.get("/api/v1/status", headers=H).json()["fx"]["exchange"] == 5200.5
+
+
+def test_api_exposes_display_names(client, db_path):
+    conn = db.connect(db_path)
+    db.set_setting(conn, "names", {"ORCL": "Oracle", "005930.KS": "Samsung"})
+    conn.close()
+    for path in ("/api/v1/settings", "/api/v1/status"):
+        names = client.get(path, headers=H).json()["names"]
+        assert names["ORCL"] == "Oracle(ORCL)"
+        assert names["005930.KS"] == "삼성전자"
+        assert names["AAPL"] == "애플(AAPL)"
+    assert client.patch("/api/v1/settings", headers=H, json={}).json()["names"]["ORCL"] == "Oracle(ORCL)"

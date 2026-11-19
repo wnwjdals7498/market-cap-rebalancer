@@ -78,12 +78,12 @@ export function StatusPanel({ client, onUnauthorized }: { client: Client; onUnau
               {Object.entries(status.strategy).map(([code, m]) => (
                 <tr key={code}>
                   <td>{code}</td>
-                  <td>{m.ranking.join(' > ') || '-'}</td>
-                  <td>{m.confirmed.join(' > ') || '-'}</td>
+                  <td>{m.ranking.map((t) => status.names[t] ?? t).join(' > ') || '-'}</td>
+                  <td>{m.confirmed.map((t) => status.names[t] ?? t).join(' > ') || '-'}</td>
                   <td>
                     {Object.entries(m.targets)
                       .sort(([, a], [, b]) => b - a)
-                      .map(([t, w]) => `${t} ${(w * 100).toFixed(1)}%`)
+                      .map(([t, w]) => `${status.names[t] ?? t} ${(w * 100).toFixed(1)}%`)
                       .join(', ') || '-'}
                   </td>
                   <td>{m.last_trade ?? '없음'}</td>

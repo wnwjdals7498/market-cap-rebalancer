@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr, WithJsonSchem
 
 import control
 import db
+import report
 import webreport
 from markets import MARKETS, current_session
 
@@ -82,6 +83,7 @@ class FxPlan(BaseModel):
 
 
 class Status(BaseModel):
+    names: dict[str, str]
     trading: Trading
     paused: Paused
     markets: dict[str, MarketTimes]
@@ -92,6 +94,7 @@ class Status(BaseModel):
 
 
 class Snapshot(BaseModel):
+    names: dict[str, str]
     trading: Trading
     paused: Paused
     config: dict[str, float | int | bool | str | list[float] | list[str]]
@@ -232,20 +235,20 @@ def create_app(db_path: Path | str, token: str | None,
         fx = plan and {"from_market": plan["from"], "amount": plan["amount"],
                        "currency": MARKETS[plan["from"]].currency, "created": plan["created"],
                        "ready": plan["ready"], "exchange": plan.get("exchange")}
-        return {"trading": control.trading_settings(conn), "paused": control.paused(conn),
+        return {"names": report.display_names(conn), "trading": control.trading_settings(conn), "paused": control.paused(conn),
                 "markets": market_status, "runs": runs, "strategy": strategy, "fx": fx or None,
                 "db_version": webreport.db_version(db_path)}
 
     @router.get("/settings", response_model=Settings)
     def get_settings(conn: sqlite3.Connection = Depends(connection)):
-        return control.snapshot(conn) | {"limits": control.LIMITS}
+        return control.snapshot(conn) | {"limits": control.LIMITS, "names": report.display_names(conn)}
 
     @router.patch("/settings", response_model=Snapshot)
     def patch_settings(patch: SettingsPatch, conn: sqlite3.Connection = Depends(connection)):
         changes = patch.model_dump(exclude_unset=True)
         confirm = changes.pop("confirm", None)
         try:
-            return control.update(conn, changes, "web", confirm=confirm)
+            return control.update(conn, changes, "web", confirm=confirm) | {"names": report.display_names(conn)}
         except control.ControlError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

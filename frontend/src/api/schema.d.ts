@@ -236,6 +236,10 @@ export interface components {
             limits: {
                 [key: string]: components["schemas"]["Limit"];
             };
+            /** Names */
+            names: {
+                [key: string]: string;
+            };
             paused: components["schemas"]["Paused"];
             trading: components["schemas"]["Trading"];
         };
@@ -260,6 +264,10 @@ export interface components {
             };
             /** Editable */
             editable: string[];
+            /** Names */
+            names: {
+                [key: string]: string;
+            };
             paused: components["schemas"]["Paused"];
             trading: components["schemas"]["Trading"];
         };
@@ -271,6 +279,10 @@ export interface components {
             /** Markets */
             markets: {
                 [key: string]: components["schemas"]["MarketTimes"];
+            };
+            /** Names */
+            names: {
+                [key: string]: string;
             };
             paused: components["schemas"]["Paused"];
             /** Runs */

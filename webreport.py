@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 
 import control
 import report
-from report import name
 
 # Categorical slots (reference palette, light / dark). A ticker keeps its slot via its universe position,
 # so colors follow the entity, never its rank.
@@ -155,16 +154,16 @@ def line_chart(dates: list[str], series: list[dict], fmt, height: int = 220) -> 
     parts.append(f'<line class="cross" y1="{T}" y2="{H - B}" stroke="var(--muted)" stroke-dasharray="3 3" '
                  f'style="display:none"/></svg>')
     data = {"x": [round(v, 1) for v in xs], "dates": dates,
-            "series": [{"n": name(s["name"]), "c": f"var(--series-{s['slot'] + 1})",
+            "series": [{"n": s["name"], "c": f"var(--series-{s['slot'] + 1})",
                         "v": s["values"], "f": [fmt(v) if v is not None else "" for v in s["values"]]}
                        for s in series]}
     legend = ""
     if len(series) >= 2:
         legend = '<div class="legend">' + "".join(
-            f'<span><b style="background:var(--series-{s["slot"] + 1})"></b>{esc(name(s["name"]))}</span>'
+            f'<span><b style="background:var(--series-{s["slot"] + 1})"></b>{esc(s["name"])}</span>'
             for s in series) + "</div>"
     table = ('<details><summary>표로 보기</summary><div class="scroll"><table><tr><th>날짜</th>'
-             + "".join(f'<th class="n">{esc(name(s["name"]))}</th>' for s in series) + "</tr>"
+             + "".join(f'<th class="n">{esc(s["name"])}</th>' for s in series) + "</tr>"
              + "".join(f"<tr><td>{esc(d)}</td>" + "".join(
                  f'<td class="n">{esc(fmt(s["values"][i])) if s["values"][i] is not None else ""}</td>'
                  for s in series) + "</tr>" for i, d in enumerate(dates))
@@ -179,6 +178,7 @@ def _won_axis(v: float) -> str:
 
 
 def market_card(conn: sqlite3.Connection, market: str) -> str:
+    names = report.display_names(conn)
     universe = list(control.load_config(conn).universe(market))
     slot = {t: i for i, t in enumerate(universe)}
     lines, value, warns = report.market_section(conn, market)
@@ -199,7 +199,7 @@ def market_card(conn: sqlite3.Connection, market: str) -> str:
         bar = (f'<div class="wbar"><span style="width:{w * 100:.1f}%"></span>'
                + (f'<i style="left:{tw * 100:.1f}%"></i>' if tw is not None else "") + "</div>")
         qty = "" if r["ticker"] == "CASH" else f"{r['qty']:,.0f}"
-        rows.append(f"<tr><td>{esc('현금' if r['ticker'] == 'CASH' else name(r['ticker']))}</td>"
+        rows.append(f"<tr><td>{esc('현금' if r['ticker'] == 'CASH' else names.get(r['ticker'], r['ticker']))}</td>"
                     f'<td class="n">{qty}</td><td class="n">{esc(report.money(r["value"], market))}</td>'
                     f'<td class="n">{w:.1%}</td><td class="n">{"" if tw is None else f"{tw:.0%}"}</td>'
                     f'<td class="barcol">{bar}</td></tr>')
@@ -216,7 +216,7 @@ def market_card(conn: sqlite3.Connection, market: str) -> str:
     caps = {(r["session_date"], r["ticker"]): r["mcap"] for r in conn.execute(
         "SELECT session_date, ticker, mcap FROM rankings WHERE market = ? AND session_date >= ?",
         (market, dates[0] if dates else ""))}
-    series = [{"name": t, "slot": slot.get(t, 0) % len(SERIES),
+    series = [{"name": names.get(t, t), "slot": slot.get(t, 0) % len(SERIES),
                "values": [caps.get((d, t)) for d in dates]} for t in top]
     chart = line_chart(dates, series, lambda v: report.mcap(v, market))
 
@@ -252,9 +252,10 @@ def build_html(conn: sqlite3.Connection, usdkrw: float | None = None, version: s
     equity_chart = line_chart([r["date"] for r in eq], [{"name": "총자산", "slot": 0,
                                                        "values": [r["total"] for r in eq]}], _won_axis)
 
+    names = report.display_names(conn)
     orders = conn.execute("SELECT * FROM orders ORDER BY session_date DESC, id DESC LIMIT 40").fetchall()
     order_rows = "".join(
-        f"<tr><td>{esc(o['session_date'])}</td><td>{esc(o['market'])}</td><td>{esc(name(o['ticker']))}</td>"
+        f"<tr><td>{esc(o['session_date'])}</td><td>{esc(o['market'])}</td><td>{esc(names.get(o['ticker'], o['ticker']))}</td>"
         f"<td>{'매수' if o['side'] == 'BUY' else '매도'}</td><td class=\"n\">{o['step']}</td>"
         f"<td class=\"n\">{o['filled_qty']}/{o['qty']}</td>"
         f"<td class=\"n\">{esc(report.price(o['limit_price'], o['market']))}</td>"

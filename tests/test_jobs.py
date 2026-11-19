@@ -243,7 +243,7 @@ def test_failures_alert_once_and_trades_alert(env, no_real_alerts):
             jobs.run_signal(conn, US, "2026-10-26", src, cfg, pd.Timestamp(f"2026-10-26 {minute}", tz=NY))
     assert len(no_real_alerts) == 1 and "FAILED" in no_real_alerts[0]
     run_day(conn, src, cfg, "2026-10-26", {"AAPL": 5000})
-    assert any("execute US 2026-10-26 OK" in m and "BUY AAPL" in m for m in no_real_alerts)
+    assert any("execute US 2026-10-26 OK" in m and "BUY 애플(AAPL)" in m for m in no_real_alerts)
 
 
 def test_ranking_change_alert(env, no_real_alerts):
@@ -251,7 +251,7 @@ def test_ranking_change_alert(env, no_real_alerts):
     run_day(conn, src, cfg, "2026-10-26", {"AAPL": 5000, "NVDA": 4900})
     assert not any("순위 변화" in m for m in no_real_alerts)  # the first ranking has nothing to change from
     run_day(conn, src, cfg, "2026-10-27", {"AAPL": 4900, "NVDA": 5000})
-    assert any("순위 변화" in m and "NVDA > AAPL" in m for m in no_real_alerts)
+    assert any("순위 변화" in m and "엔비디아(NVDA) > 애플(AAPL)" in m for m in no_real_alerts)
 
 
 def test_daily_report_sends_once_and_skips_quiet_days(env, no_real_alerts):
@@ -264,8 +264,8 @@ def test_daily_report_sends_once_and_skips_quiet_days(env, no_real_alerts):
     text = no_real_alerts[0]
     assert text.startswith("📊 일일 보고 2026-10-27 (화)")
     assert "총자산 ₩140,000,000" in text
-    assert "순위 AAPL > NVDA > MSFT | 다음 매매 주간 | 대기 0/0일" in text
-    assert "매수 AAPL 300주 @100.00" in text and "(1·2위 차 +2.0%)" in text
+    assert "순위 애플(AAPL) > 엔비디아(NVDA) > 마이크로소프트(MSFT) | 다음 매매 주간 | 대기 0/0일" in text
+    assert "매수 애플(AAPL) 300주 @100.00" in text and "(1·2위 차 +2.0%)" in text
 
     assert "already done" in jobs.run_report(conn, morning, fx=lambda: 1400.0)
     next_day = pd.Timestamp("2026-10-28 08:05", tz="Asia/Seoul")
@@ -304,7 +304,7 @@ def test_web_report_page(env, tmp_path):
 
     page = webreport.build_html(conn)
     assert page.startswith("<!doctype html>") and "<title>투자 리포트</title>" in page
-    assert "₩140,000,000" in page and "US 2026-10-27 | 순위 NVDA &gt; AAPL" in page
+    assert "₩140,000,000" in page and "US 2026-10-27 | 순위 엔비디아(NVDA) &gt; 애플(AAPL)" in page
     assert page.count('class="chart"') == 2  # equity history + US market caps (KR has no rankings)
     assert "<script src" not in page and "<link" not in page  # self-contained
     assert "<title>투자 리포트</title>" in webreport.write_site(conn, tmp_path / "site").read_text(encoding="utf-8")
@@ -1140,3 +1140,46 @@ def test_pending_cash_ignores_band(env):
     result = jobs.run_execute(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 12:50", tz=NY))
     assert "BUY" in result
     assert db.latest_positions(conn, "US")[1][CASH] < 20_000
+
+
+def test_report_shows_korean_and_us_names(env):
+    import report
+    import webreport
+    conn, src, cfg = env
+    run_day(conn, src, cfg, "2026-10-26", TOP3)
+    db.save_positions(conn, "2026-10-26", "KR", {CASH: 0, "229200.KS": 10}, {"229200.KS": 100})
+    db.claim_run(conn, "execute", "KR", "2026-10-26", False)
+    db.finish_run(conn, "execute", "KR", "2026-10-26", "FAILED", "missing 229200.KS")
+    text, _ = report.build_report(conn, "2026-10-27", 1400)
+    assert "KODEX 코스닥150" in text and "229200.KS" not in text
+    assert "애플(AAPL)" in text
+    assert "missing KODEX 코스닥150" in text
+    page = webreport.build_html(conn)
+    assert "KODEX 코스닥150" in page and "애플(AAPL)" in page
+
+
+def test_alert_text_uses_names(env, no_real_alerts):
+    conn, src, cfg = env
+    run_day(conn, src, cfg, "2026-10-26", TOP3)
+    assert any("애플(AAPL)" in message for message in no_real_alerts)
+    detail = conn.execute("SELECT detail FROM runs WHERE job='execute' AND market='US'").fetchone()[0]
+    assert "BUY AAPL" in detail and "애플" not in detail
+
+
+def test_unknown_pool_ticker_uses_screen_name(env):
+    import screener
+    import report
+    conn, _, _ = env
+    quotes = [{"symbol": symbol, "quoteType": "EQUITY", "marketCap": 100 - i,
+               "regularMarketPrice": 10, "shortName": name}
+              for i, (symbol, name) in enumerate([(t, t) for t in UNIVERSE[:4]] + [("ORCL", "Oracle")])]
+    calls = []
+    def fetch(region, count):
+        calls.append((region, count))
+        return quotes
+    cfg = Config(pool_auto=True, pool_size=5)
+    jobs.refresh_pool(conn, US, "2026-10-26", cfg,
+                      screen=lambda market, size: screener.screen_top(market, size, fetch))
+    assert calls == [("us", 15)]
+    assert db.get_setting(conn, "names")["ORCL"] == "Oracle"
+    assert report.name("ORCL", db.get_setting(conn, "names")) == "Oracle(ORCL)"

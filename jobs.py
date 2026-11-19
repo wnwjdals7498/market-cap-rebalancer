@@ -107,7 +107,11 @@ def refresh_pool(conn: sqlite3.Connection, mkt: Market, session: str, cfg: Confi
         return cfg
     key = f"{code.lower()}_universe"
     try:
-        new = list(screen(code, cfg.pool_size))
+        screened = screen(code, cfg.pool_size)
+        new = list(screened)
+        found_names = getattr(screened, "names", {})
+        if found_names:
+            db.set_setting(conn, "names", db.get_setting(conn, "names", {}) | found_names)
         if set(new) == set(cfg.universe(code)):
             changed = None
         else:
@@ -141,14 +145,16 @@ def _guarded(job: str, conn: sqlite3.Connection, mkt: Market | str, session: str
             log.exception("%s %s %s failed", job, code, session)
         if not (last and last["status"] == "FAILED" and last["detail"] == repr(e)):  # tick retries every 5 min
             why = notify.hint(str(e))
-            notify.send(f"❌ {job} {code} {session} FAILED: {e}" + (f"\n→ {why}" if why else ""))
+            message = f"❌ {job} {code} {session} FAILED: {e}" + (f"\n→ {why}" if why else "")
+            notify.send(report.replace_tickers(message, report.display_names(conn)))
         raise
     db.finish_run(conn, job, code, session, status, detail)
     log.info("%s %s %s %s: %s", job, code, session, status, detail)
     # alert on anything a human should look at: held-back signals, partial fills, and every trade
     if job != "report" and detail != NO_TRADE and (
             status in ("SKIPPED", "PARTIAL") or (job == "execute" and not detail.startswith("no orders"))):
-        notify.send(f"{'⚠️' if status != 'OK' else '✅'} {job} {code} {session} {status}: {detail}")
+        message = f"{'⚠️' if status != 'OK' else '✅'} {job} {code} {session} {status}: {detail}"
+        notify.send(report.replace_tickers(message, report.display_names(conn)))
     return f"{job} {code} {session} {status}: {detail}"
 
 
@@ -254,7 +260,10 @@ def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source,
             confirmed, note = update_ranking(state, [t for t, _ in ranked], cfg), "OK"
         db.save_rank_state(conn, session, mkt.code, state)
         if before and note == "OK" and before != confirmed:
-            notify.send(f"🔄 {mkt.code} {session} 순위 변화: {' > '.join(before)} → {' > '.join(confirmed)}")
+            names = report.display_names(conn)
+            notify.send(f"🔄 {mkt.code} {session} 순위 변화: "
+                        f"{' > '.join(names.get(t, t) for t in before)} → "
+                        f"{' > '.join(names.get(t, t) for t in confirmed)}")
 
         prices = {t: q.price for t, q in quotes.items()}
         missing = [t for t in units if t != CASH and t not in prices]

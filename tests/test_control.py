@@ -259,3 +259,12 @@ def test_cash_command_notification_format(conn, no_real_alerts, market, amount, 
 def test_cash_flow_notification_format(conn, no_real_alerts, market, delta, expected):
     control.record_flow(conn, market, delta)
     assert no_real_alerts[-1] == expected
+
+
+def test_ticker_settings_and_retirement_alerts_use_display_names(conn, no_real_alerts):
+    control.update(conn, {"config": {"kr_kosdaq_etf": "069500.KS", "kr_kospi_etf": "229200.KS"}}, "cli")
+    assert "KODEX 코스닥150" in no_real_alerts[-1]
+    assert "229200.KS" not in no_real_alerts[-1]
+    db.set_setting(conn, "retired", {"US": {"AAPL": "stock"}})
+    control.drop_retired(conn, "US", ["AAPL"])
+    assert "애플(AAPL)" in no_real_alerts[-1]

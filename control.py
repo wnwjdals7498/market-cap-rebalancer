@@ -156,7 +156,9 @@ def drop_retired(conn: sqlite3.Connection, market: str, tickers: list[str], sour
         retired[market] = left
         conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", ("retired", json.dumps(retired)))
         db.log_setting_change(conn, f"retired.{market}", current, left, source)
-    notify.send(f"🧹 {market} 정리 완료: " + ", ".join(sorted(set(current) - set(left))))
+    import report
+    names = report.display_names(conn)
+    notify.send(f"🧹 {market} 정리 완료: " + ", ".join(names.get(t, t) for t in sorted(set(current) - set(left))))
 
 
 def load_config(conn: sqlite3.Connection) -> Config:
@@ -249,7 +251,9 @@ def update(conn: sqlite3.Connection, changes: dict, source: str, confirm: str | 
                 conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", (group, json.dumps(saved)))
         result = snapshot(conn)
     if recorded:
-        notify.send(f"⚙️ 설정 변경 ({source}): " + ", ".join(recorded))
+        import report
+        notify.send(report.replace_tickers(f"⚙️ 설정 변경 ({source}): " + ", ".join(recorded),
+                                           report.display_names(conn)))
     return result
 
 
