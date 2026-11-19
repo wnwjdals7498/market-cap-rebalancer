@@ -154,6 +154,8 @@ def test_settings_ui_is_served(tmp_path):
 def test_settings_expose_typed_limits(client):
     body = client.get("/api/v1/settings", headers=H).json()
     assert body["limits"]["rank_weights"]["type"] == "weights"
+    assert body["limits"]["rank_weights"]["slots"] == 5
+    assert all(body["limits"][key]["slots"] == 3 for key in ("safe_weights", "us_risk_weights", "kr_risk_weights"))
     assert body["config"]["rank_weights"] == [50, 30, 20, 0, 0]
     assert body["limits"]["trade_every"]["options"] == ["day", "week", "month"]
     assert body["config"]["fx_enabled"] is True and body["config"]["us_universe"][0] == "AAPL"

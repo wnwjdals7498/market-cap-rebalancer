@@ -118,6 +118,17 @@
             ],
             "title": "Options"
           },
+          "slots": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slots"
+          },
           "type": {
             "enum": [
               "int",

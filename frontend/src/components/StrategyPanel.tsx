@@ -108,7 +108,8 @@ export function StrategyPanel({ client, settings, onChange, onUnauthorized }: Pr
 
   function cells(key: string): string[] {
     const draft = drafts[key] ?? initial(settings.config[key], settings.limits[key])
-    return Array.isArray(draft) ? draft : []
+    const values = Array.isArray(draft) ? draft : []
+    return Array.from({ length: settings.limits[key].slots ?? values.length }, (_, i) => values[i] ?? '')
   }
 
   function editCell(key: string, index: number, value: string) {
@@ -165,23 +166,32 @@ export function StrategyPanel({ client, settings, onChange, onUnauthorized }: Pr
                  spellCheck={false} autoCapitalize="characters"
                  onChange={(e) => edit(key, e.target.value)} />
         )
-      case 'weights':
+      case 'weights': {
+        const values = cells(key)
+        const names = limit.label.match(/\(([^,)]*)/)?.[1].split('/').map((name) => name.trim()) ?? []
         return (
-          <div className="cells" role="group" aria-labelledby={`${id}-label`}>
-            {cells(key).map((cell, i) => (
-              <input
-                key={i}
-                type="number"
-                inputMode="decimal"
-                step="any"
-                aria-label={`${i + 1}위 비율`}
-                value={cell}
-                aria-invalid={key in problems}
-                onChange={(e) => editCell(key, i, e.target.value)}
-              />
-            ))}
+          <div className="cells" role="group" aria-labelledby={`${id}-label`}
+               style={{ gridTemplateColumns: `repeat(${values.length}, minmax(0, 1fr))` }}>
+            {values.map((cell, i) => {
+              const name = key === 'rank_weights' ? `${i + 1}위` : (names[i] || `${i + 1}번`)
+              return (
+                <label key={i}>
+                  <span>{name}</span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step="any"
+                    aria-label={`${name} 비율`}
+                    value={cell}
+                    aria-invalid={key in problems}
+                    onChange={(e) => editCell(key, i, e.target.value)}
+                  />
+                </label>
+              )
+            })}
           </div>
         )
+      }
     }
   }
 

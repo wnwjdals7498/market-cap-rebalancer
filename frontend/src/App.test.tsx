@@ -126,6 +126,76 @@ describe('settings UI', () => {
     expect(JSON.parse(String(patchCalls(fetchFn)[0][1]?.body))).toEqual({ config: { rank_weights: [40, 30, 20, 10, 0] } })
   })
 
+  it('safe weights edits three slots summing to 100', async () => {
+    sessionStorage.setItem('mcr_token', 't')
+    const fetchFn = stubFetch({ ...defaultRoutes(), 'PATCH /api/v1/settings': () => json(settings) })
+    render(<App />)
+    const group = await screen.findByRole('group', { name: '안전자산 비율 (단기채/장기채/금, 합 100)' })
+    expect(within(group).getAllByRole('spinbutton')).toHaveLength(3)
+    const short = within(group).getByLabelText('단기채 비율')
+    const gold = within(group).getByLabelText('금 비율')
+    await userEvent.clear(short)
+    await userEvent.type(short, '80')
+    await userEvent.clear(gold)
+    await userEvent.type(gold, '20')
+    await userEvent.click(screen.getByRole('button', { name: '저장' }))
+    await waitFor(() => expect(patchCalls(fetchFn)).toHaveLength(1))
+    expect(JSON.parse(String(patchCalls(fetchFn)[0][1]?.body))).toEqual({ config: { safe_weights: [80, 0, 20] } })
+  })
+
+  it('risk weights rejects sum not 100', async () => {
+    sessionStorage.setItem('mcr_token', 't')
+    stubFetch(defaultRoutes())
+    render(<App />)
+    const group = await screen.findByRole('group', { name: '미국 위험자산 비율 (개별주/나스닥/S&P500, 합 100)' })
+    expect(within(group).getAllByRole('spinbutton')).toHaveLength(3)
+    expect(within(group).getByLabelText('나스닥 비율')).toBeInTheDocument()
+    expect(within(group).getByLabelText('S&P500 비율')).toBeInTheDocument()
+    const krGroup = screen.getByRole('group', { name: '한국 위험자산 비율 (개별주/코스피/코스닥, 합 100)' })
+    expect(within(krGroup).getByLabelText('코스피 비율')).toBeInTheDocument()
+    expect(within(krGroup).getByLabelText('코스닥 비율')).toBeInTheDocument()
+    const first = within(group).getByLabelText('개별주 비율')
+    await userEvent.clear(first)
+    await userEvent.type(first, '60')
+    expect(screen.getByText(/합계가 100이어야 합니다 \(현재 60\)/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '저장' })).toBeDisabled()
+  })
+
+  it('uses value length when weight slots are missing', async () => {
+    sessionStorage.setItem('mcr_token', 't')
+    const safe = { ...settings.limits.safe_weights, slots: null }
+    stubFetch({ ...defaultRoutes(), 'GET /api/v1/settings': () => json({
+      ...settings, limits: { ...settings.limits, safe_weights: safe },
+    }) })
+    render(<App />)
+    const group = await screen.findByRole('group', { name: '안전자산 비율 (단기채/장기채/금, 합 100)' })
+    expect(within(group).getAllByRole('spinbutton')).toHaveLength(3)
+    expect(within(group).getByLabelText('장기채 비율')).toBeInTheDocument()
+  })
+
+  it('uses the configured slot count for the editor', async () => {
+    sessionStorage.setItem('mcr_token', 't')
+    const safe = { ...settings.limits.safe_weights, slots: 2 }
+    stubFetch({ ...defaultRoutes(), 'GET /api/v1/settings': () => json({
+      ...settings, limits: { ...settings.limits, safe_weights: safe },
+    }) })
+    render(<App />)
+    const group = await screen.findByRole('group', { name: '안전자산 비율 (단기채/장기채/금, 합 100)' })
+    expect(within(group).getAllByRole('spinbutton')).toHaveLength(2)
+  })
+
+  it('shows all six ETF ticker editors', async () => {
+    sessionStorage.setItem('mcr_token', 't')
+    stubFetch(defaultRoutes())
+    render(<App />)
+    expect(await screen.findByLabelText('미국 금 ETF')).toHaveValue('GLD')
+    expect(screen.getByLabelText('한국 금 ETF')).toHaveValue('411060.KS')
+    expect(screen.getByLabelText('미국 나스닥 ETF')).toHaveValue('QQQ')
+    expect(screen.getByLabelText('미국 S&P500 ETF')).toHaveValue('SPY')
+    expect(screen.getByLabelText('한국 코스피 ETF')).toHaveValue('069500.KS')
+    expect(screen.getByLabelText('한국 코스닥 ETF')).toHaveValue('229200.KS')
+  })
+
   it('trade_every select sends week', async () => {
     sessionStorage.setItem('mcr_token', 't')
     const fetchFn = stubFetch({ ...defaultRoutes(), 'PATCH /api/v1/settings': () => json(settings) })

@@ -45,6 +45,7 @@ class Limit(BaseModel):
     max: float | None = None
     options: list[str] | None = None
     market: str | None = None
+    slots: int | None = None
 
 
 class MarketTimes(BaseModel):

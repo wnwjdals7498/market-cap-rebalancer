@@ -109,6 +109,8 @@ export interface components {
             min?: number | null;
             /** Options */
             options?: string[] | null;
+            /** Slots */
+            slots?: number | null;
             /**
              * Type
              * @enum {string}
