@@ -214,3 +214,29 @@ def test_api_exposes_display_names(client, db_path):
         assert names["005930.KS"] == "삼성전자"
         assert names["AAPL"] == "애플(AAPL)"
     assert client.patch("/api/v1/settings", headers=H, json={}).json()["names"]["ORCL"] == "Oracle(ORCL)"
+
+
+def test_cash_endpoints_require_confirm_and_validate(client, db_path, no_real_alerts):
+    conn = db.connect(db_path)
+    db.save_positions(conn, "2026-11-19", "KR", {"CASH": 5_000_000, "005930.KS": 10}, {"005930.KS": 100_000})
+    db.save_positions(conn, "2026-11-19", "US", {"CASH": 1000}, {})
+    db.set_setting(conn, "cash:principal", {"KR": 6_000_000})
+    conn.close()
+    request = {"market": "KR", "action": "reserve", "amount": 1_000_000}
+    assert client.get('/api/v1/cash').status_code == 401
+    assert client.post('/api/v1/cash', json=request).status_code == 401
+    assert client.post('/api/v1/cash', headers=H, json=request).status_code == 400
+    assert client.post('/api/v1/cash', headers=H, json=request | {"confirm": "cash"}).status_code == 400
+    response = client.post('/api/v1/cash', headers=H, json=request | {"confirm": "CASH"})
+    assert response.status_code == 200
+    cash = client.get('/api/v1/cash', headers=H).json()
+    assert cash['KR'] == {"reserve": 1_000_000, "pending": True, "principal": 5_000_000,
+                          "invested_value": 5_000_000, "currency": "KRW"}
+    assert cash['US']['invested_value'] == 1000 and cash['US']['currency'] == 'USD'
+    assert client.post('/api/v1/cash', headers=H, json={"market": "KR", "action": "invest", "amount": 1_000_001}).status_code == 400
+    assert client.post('/api/v1/cash', headers=H, json={"market": "US", "action": "set", "amount": -1}).status_code == 400
+    assert client.post('/api/v1/cash', headers=H, json=request | {"amount": 10_000_000, "confirm": "CASH"}).status_code == 400
+    conn = db.connect(db_path)
+    assert db.setting_changes(conn)[0]['source'] == 'web'
+    conn.close()
+    assert no_real_alerts

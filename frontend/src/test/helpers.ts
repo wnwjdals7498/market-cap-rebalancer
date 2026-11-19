@@ -129,6 +129,10 @@ export function stubFetch(routes: Record<string, Handler>) {
 export function defaultRoutes(): Record<string, Handler> {
   return {
     'GET /api/v1/settings': () => json(settings),
+    'GET /api/v1/cash': () => json({
+      KR: { reserve: 0, pending: false, principal: 0, invested_value: null, currency: 'KRW' },
+      US: { reserve: 0, pending: false, principal: 0, invested_value: null, currency: 'USD' },
+    }),
     'GET /api/v1/status': () => json(status),
     'GET /api/v1/settings/log': () => json([]),
   }

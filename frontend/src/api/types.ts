@@ -8,11 +8,14 @@ type Schemas = components['schemas']
 
 export const API_PATHS = {
   status: '/api/v1/status',
+  cash: '/api/v1/cash',
   settings: '/api/v1/settings',
   log: '/api/v1/settings/log',
   orders: '/api/v1/orders',
 } as const satisfies Record<string, keyof paths>
 
+export type CashBalances = Schemas['CashBalances']
+export type CashCommand = Schemas['CashCommand']
 export type Trading = Schemas['Trading']
 export type Paused = Schemas['Paused']
 export type Limit = Schemas['Limit']

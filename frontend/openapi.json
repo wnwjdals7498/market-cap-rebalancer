@@ -1,6 +1,112 @@
 {
   "components": {
     "schemas": {
+      "CashBalances": {
+        "properties": {
+          "KR": {
+            "$ref": "#/components/schemas/CashMarket"
+          },
+          "US": {
+            "$ref": "#/components/schemas/CashMarket"
+          }
+        },
+        "required": [
+          "KR",
+          "US"
+        ],
+        "title": "CashBalances",
+        "type": "object"
+      },
+      "CashCommand": {
+        "properties": {
+          "action": {
+            "enum": [
+              "reserve",
+              "invest",
+              "set"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Amount"
+          },
+          "confirm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirm"
+          },
+          "market": {
+            "enum": [
+              "KR",
+              "US"
+            ],
+            "title": "Market",
+            "type": "string"
+          }
+        },
+        "required": [
+          "market",
+          "action",
+          "amount"
+        ],
+        "title": "CashCommand",
+        "type": "object"
+      },
+      "CashMarket": {
+        "properties": {
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "invested_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invested Value"
+          },
+          "pending": {
+            "title": "Pending",
+            "type": "boolean"
+          },
+          "principal": {
+            "title": "Principal",
+            "type": "number"
+          },
+          "reserve": {
+            "title": "Reserve",
+            "type": "number"
+          }
+        },
+        "required": [
+          "reserve",
+          "pending",
+          "principal",
+          "invested_value",
+          "currency"
+        ],
+        "title": "CashMarket",
+        "type": "object"
+      },
       "FxPlan": {
         "properties": {
           "amount": {
@@ -899,6 +1005,70 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/cash": {
+      "get": {
+        "operationId": "get_cash_api_v1_cash_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CashBalances"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Cash"
+      },
+      "post": {
+        "operationId": "post_cash_api_v1_cash_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CashCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CashBalances"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Post Cash"
+      }
+    },
     "/api/v1/orders": {
       "get": {
         "operationId": "orders_api_v1_orders_get",

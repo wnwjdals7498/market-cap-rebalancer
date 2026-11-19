@@ -16,7 +16,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr, WithJsonSchema
+from pydantic import BaseModel, ConfigDict, StrictBool, StrictFloat, StrictInt, StrictStr, WithJsonSchema
 
 import control
 import db
@@ -103,6 +103,26 @@ class Snapshot(BaseModel):
 
 class Settings(Snapshot):
     limits: dict[str, Limit]
+
+
+class CashMarket(BaseModel):
+    reserve: float
+    pending: bool
+    principal: float
+    invested_value: float | None
+    currency: str
+
+
+class CashBalances(BaseModel):
+    KR: CashMarket
+    US: CashMarket
+
+
+class CashCommand(BaseModel):
+    market: Literal["KR", "US"]
+    action: Literal["reserve", "invest", "set"]
+    amount: StrictFloat | StrictInt
+    confirm: str | None = None
 
 
 class LogEntry(BaseModel):
@@ -251,6 +271,28 @@ def create_app(db_path: Path | str, token: str | None,
             return control.update(conn, changes, "web", confirm=confirm) | {"names": report.display_names(conn)}
         except control.ControlError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    def cash_balances(conn: sqlite3.Connection) -> dict:
+        state = control.cash_state(conn)
+        return {code: {"reserve": state["reserve"][code], "pending": state["pending"][code],
+                       "principal": state["principal"][code],
+                       "invested_value": None if value is None else value - state["reserve"][code],
+                       "currency": MARKETS[code].currency}
+                for code, value in zip(("KR", "US"), report.pocket_values(conn))}
+
+    @router.get("/cash", response_model=CashBalances)
+    def get_cash(conn: sqlite3.Connection = Depends(connection)):
+        return cash_balances(conn)
+
+    @router.post("/cash", response_model=CashBalances)
+    def post_cash(command: CashCommand, conn: sqlite3.Connection = Depends(connection)):
+        if command.action == "reserve" and command.confirm != "CASH":
+            raise HTTPException(status_code=400, detail="현금을 만들려면 CASH 확인이 필요합니다")
+        try:
+            control.cash_command(conn, command.market, command.action, command.amount, source="web")
+        except control.ControlError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return cash_balances(conn)
 
     @router.get("/settings/log", response_model=list[LogEntry])
     def settings_log(limit: int = Query(default=50, ge=1, le=500), conn: sqlite3.Connection = Depends(connection)):

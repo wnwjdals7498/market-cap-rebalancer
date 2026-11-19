@@ -1,5 +1,5 @@
 import { API_PATHS } from './types'
-import type { LogEntry, Order, Settings, SettingsPatch, Snapshot, Status } from './types'
+import type { CashBalances, CashCommand, LogEntry, Order, Settings, SettingsPatch, Snapshot, Status } from './types'
 
 export class UnauthorizedError extends Error {
   constructor() {
@@ -41,6 +41,9 @@ export function createClient(token: string) {
 
   return {
     getStatus: () => request<Status>(API_PATHS.status),
+    getCash: () => request<CashBalances>(API_PATHS.cash),
+    postCash: (body: CashCommand) =>
+      request<CashBalances>(API_PATHS.cash, { method: 'POST', body: JSON.stringify(body) }),
     getSettings: () => request<Settings>(API_PATHS.settings),
     patchSettings: (body: SettingsPatch) =>
       request<Snapshot>(API_PATHS.settings, { method: 'PATCH', body: JSON.stringify(body) }),

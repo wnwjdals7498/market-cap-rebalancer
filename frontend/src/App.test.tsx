@@ -326,3 +326,41 @@ describe('stock names', () => {
     expect(screen.getByLabelText('한국 코스닥 ETF')).toHaveValue('229200.KS')
   })
 })
+
+describe('cash reserve', () => {
+  const cash = {
+    KR: { reserve: 1000, pending: false, principal: 10000, invested_value: 10000, currency: 'KRW' },
+    US: { reserve: 50, pending: true, principal: 1000, invested_value: 900, currency: 'USD' },
+  }
+
+  it('cash reserve requires CASH confirmation', async () => {
+    sessionStorage.setItem('mcr_token', 't')
+    const fetchFn = stubFetch({ ...defaultRoutes(), 'GET /api/v1/cash': () => json(cash),
+      'POST /api/v1/cash': () => json(cash) })
+    render(<App />)
+    await userEvent.type(await screen.findByLabelText('KR 금액'), '500')
+    expect(screen.getByRole('region', { name: 'KR 보관 현금' })).toHaveTextContent('보관 현금 1,000원 · 투자금 평가액 10,000원')
+    expect(screen.getByRole('region', { name: 'US 보관 현금' })).toHaveTextContent('보관 현금 50.00달러 · 투자금 평가액 900.00달러 · 대기 중')
+    await userEvent.click(within(screen.getByRole('region', { name: 'KR 보관 현금' })).getByRole('button', { name: '현금 만들기' }))
+    const dialog = screen.getByRole('dialog', { name: '현금 만들기 확인' })
+    await userEvent.type(within(dialog).getByLabelText('확인 문구'), 'cash')
+    await userEvent.click(within(dialog).getByRole('button', { name: '확인' }))
+    expect(fetchFn.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0)
+    await userEvent.clear(within(dialog).getByLabelText('확인 문구'))
+    await userEvent.type(within(dialog).getByLabelText('확인 문구'), 'CASH')
+    await userEvent.click(within(dialog).getByRole('button', { name: '확인' }))
+    await waitFor(() => expect(fetchFn.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1))
+    const call = fetchFn.mock.calls.find(([, init]) => init?.method === 'POST')
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({ market: 'KR', action: 'reserve', amount: 500, confirm: 'CASH' })
+  })
+
+  it('invest rejects more than reserve', async () => {
+    sessionStorage.setItem('mcr_token', 't')
+    const fetchFn = stubFetch({ ...defaultRoutes(), 'GET /api/v1/cash': () => json(cash) })
+    render(<App />)
+    await userEvent.type(await screen.findByLabelText('US 금액'), '51')
+    await userEvent.click(within(screen.getByRole('region', { name: 'US 보관 현금' })).getByRole('button', { name: '투자금 전환' }))
+    expect(screen.getByText(/보관 현금.*초과/)).toBeInTheDocument()
+    expect(fetchFn.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0)
+  })
+})

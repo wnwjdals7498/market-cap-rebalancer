@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { UnauthorizedError, createClient, tokenStore, type Client } from './api/client'
 import type { Settings, Snapshot } from './api/types'
+import { CashPanel } from './components/CashPanel'
 import { ChangeLog } from './components/ChangeLog'
 import { StatusPanel } from './components/StatusPanel'
 import { StrategyPanel } from './components/StrategyPanel'
@@ -42,6 +43,7 @@ function Dashboard({ client, onUnauthorized }: { client: Client; onUnauthorized:
       </header>
       {error && <p role="alert" className="error">{error}</p>}
       <StatusPanel client={client} onUnauthorized={onUnauthorized} />
+      <CashPanel client={client} onUnauthorized={onUnauthorized} />
       {settings ? (
         <>
           <TradingPanel client={client} settings={settings} onChange={apply} onUnauthorized={onUnauthorized} />
