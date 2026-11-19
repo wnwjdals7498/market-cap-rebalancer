@@ -157,9 +157,9 @@ def test_universe_change_retires_removed_tickers(conn):
     control.update(conn, {"config": {"us_universe": [t if t != "AMZN" else "ORCL" for t in us]}}, "web")
     assert db.get_setting(conn, "retired")["US"] == {"AMZN": "stock"}
     control.update(conn, {"config": {"us_short_bond": "IEF"}}, "web")
-    assert db.get_setting(conn, "retired")["US"] == {"AMZN": "stock", "SHY": "bond"}
+    assert db.get_setting(conn, "retired")["US"] == {"AMZN": "stock", "SHY": "etf"}
     control.update(conn, {"config": {"us_universe": us}}, "web")  # AMZN is back, ORCL drops out
-    assert db.get_setting(conn, "retired")["US"] == {"SHY": "bond", "ORCL": "stock"}
+    assert db.get_setting(conn, "retired")["US"] == {"SHY": "etf", "ORCL": "stock"}
 
 
 OLD_CONFIG = {"stock_pct": 60.0, "us_pct": 50.0, "fx_mode": "separate", "band_pp": 0.0, "step_pct": 10.0,
@@ -169,7 +169,7 @@ OLD_CONFIG = {"stock_pct": 60.0, "us_pct": 50.0, "fx_mode": "separate", "band_pp
 
 def test_migrate_fresh_db_only_sets_version(conn, no_real_alerts):
     assert control.migrate(conn) is False
-    assert db.get_setting(conn, "config:version") == 2
+    assert db.get_setting(conn, "config:version") == 3
     assert db.get_setting(conn, "retired") is None and db.setting_changes(conn) == []
     assert db.get_setting(conn, "rank:since") is None  # a new DB has no old-strategy trades to ignore
     new_style = {k: v for k, v in OLD_CONFIG.items() if k not in control.OLD_KEYS}
@@ -194,9 +194,36 @@ def test_migrate_old_config_once(conn, no_real_alerts):
     assert cfg.kr_taxable == set(cfg.kr_universe)
     log = db.setting_changes(conn)
     assert log and {r["source"] for r in log} == {"migration"}
-    assert db.get_setting(conn, "config:version") == 2 and len(no_real_alerts) == 1
+    assert db.get_setting(conn, "config:version") == 3 and len(no_real_alerts) == 1
 
     assert control.migrate(conn, today="2026-11-20") is False
     assert db.get_setting(conn, "rank:since") == "2026-11-10"  # set once
     assert db.setting_changes(conn) == log and len(no_real_alerts) == 1
     assert db.get_setting(conn, "retired") == retired
+
+
+def test_migrate_v2_to_v3_preserves_rank_since(tmp_path):
+    conn = db.connect(tmp_path / 'v2.db')
+    db.set_setting(conn, 'config', {'short_bond_pct': 25})
+    db.set_setting(conn, 'config:version', 2)
+    db.set_setting(conn, 'rank:since', '2026-01-01')
+    assert control.migrate(conn)
+    assert db.get_setting(conn, 'config')['safe_weights'] == [25, 75, 0]
+    assert 'short_bond_pct' not in db.get_setting(conn, 'config')
+    assert db.get_setting(conn, 'rank:since') == '2026-01-01'
+    assert db.get_setting(conn, 'config:version') == 3
+    assert db.setting_changes(conn)
+
+
+def test_changing_gold_ticker_retires_old_as_etf(tmp_path):
+    conn = db.connect(tmp_path / 'retire.db')
+    control.update(conn, {'config': {'us_gold': 'IAU'}}, 'cli')
+    assert db.get_setting(conn, 'retired')['US']['GLD'] == 'etf'
+
+
+def test_etfs_cannot_overlap_each_other_or_stocks(tmp_path):
+    conn = db.connect(tmp_path / 'overlap.db')
+    with pytest.raises(control.ControlError):
+        control.update(conn, {'config': {'us_gold': 'SHY'}}, 'cli')
+    with pytest.raises(control.ControlError):
+        control.update(conn, {'config': {'us_gold': 'AAPL'}}, 'cli')

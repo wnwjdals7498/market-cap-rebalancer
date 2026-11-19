@@ -5,7 +5,7 @@
 * 시장별 후보 풀(pool_size 종목)을 시총 순으로 줄 세운다 (update_ranking: confirm_days 만큼 유지돼야 순위 변경 확정).
 * 주식 몫(stock_pct) 안에서 1~5위에 rank_weights 비율을 준다 (stock_weights). 데이터 없는 종목은
   순위에서 빠지고 남은 순위 비율을 다시 정규화한다.
-* 나머지 채권 몫은 short_bond_pct 로 단기채/장기채에 나눈다 (pocket_weights).
+* 위험자산은 개별주와 지수 ETF로, 안전자산은 단기채/장기채/금 ETF로 나눈다 (pocket_weights).
 * 매매는 trade_every(일/주/월) 주기의 첫 성공 거래일에만, 1회에 매도 합계와 매수 합계가 각각
   step_pct × 포켓 자산을 넘지 않게 목표로 이동한다 (plan_moves). 포켓에 보유가 없을 때의 첫 매수는 예외.
 * 미국/한국 비율이 us_pct ± fx_band_pp 를 벗어나면 환전 금액을 계산해 안내한다 (fx_gap, fx_amount).
@@ -15,15 +15,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
+from collections.abc import Collection
 
 CASH = "CASH"
 
 
 @dataclass
 class Config:
-    stock_pct: float = 60.0           # 주식(시총 상위) 비중 (%). 나머지는 채권 ETF
+    stock_pct: float = 60.0           # 위험자산 비중 (%). 나머지는 안전자산
     us_pct: float = 60.0              # 총자산 중 미국(달러) 포켓 비중 (%)
-    band_pp: float = 0.0              # 주식/채권 비중 허용 오차 (%p). 0 이면 매일 정확히 맞춤
+    band_pp: float = 0.0              # 위험자산/안전자산 비중 허용 오차 (%p). 0 이면 매일 정확히 맞춤
     step_pct: float = 10.0            # 매매 1회 최대 이동량 (포켓 자산 대비 %)
     confirm_days: int = 0             # 순위 변경을 확정하기까지 대기하는 거래일 수
     us_fee: float = 0.0007            # 미국 주식/ETF 매매 수수료 (편도)
@@ -33,7 +34,9 @@ class Config:
     min_trade_pct: float = 0.5        # 실거래: 포켓 대비 이보다 작은 주문은 생략 (전량 매도는 예외)
     kr_taxable: frozenset = field(default_factory=frozenset)  # 거래세 대상 종목
     rank_weights: tuple[float, ...] = (50, 30, 20, 0, 0)  # 순위별 주식 비율 (%)
-    short_bond_pct: float = 100.0     # 채권 중 단기채 비율 (%)
+    safe_weights: tuple[float, ...] = (100.0, 0.0, 0.0)  # 안전자산 비율 (단기채/장기채/금, 합 100)
+    us_risk_weights: tuple[float, ...] = (100.0, 0.0, 0.0)  # 미국 위험자산 비율
+    kr_risk_weights: tuple[float, ...] = (100.0, 0.0, 0.0)  # 한국 위험자산 비율
     trade_every: str = "week"         # 매매 주기
     fx_band_pp: float = 5.0           # 미국 비중 환전 허용 오차 (%p)
     fx_enabled: bool = True          # 환전 계획 사용 여부
@@ -53,12 +56,29 @@ class Config:
     kr_short_bond: str = "114260.KS"  # 한국 단기채
     kr_long_bond: str = "385560.KS"   # 한국 장기채
 
+    us_gold: str = "GLD"
+    kr_gold: str = "411060.KS"
+    us_nasdaq_etf: str = "QQQ"
+    us_sp500_etf: str = "SPY"
+    kr_kospi_etf: str = "069500.KS"
+    kr_kosdaq_etf: str = "229200.KS"
+
     def universe(self, market: str) -> tuple[str, ...]:
         return self.us_universe if market == "US" else self.kr_universe
 
-    def bonds(self, market: str) -> tuple[str, str]:
-        return ((self.us_short_bond, self.us_long_bond) if market == "US"
-                else (self.kr_short_bond, self.kr_long_bond))
+    def safe_assets(self, market: str) -> tuple[str, str, str]:
+        return ((self.us_short_bond, self.us_long_bond, self.us_gold) if market == "US"
+                else (self.kr_short_bond, self.kr_long_bond, self.kr_gold))
+
+    def index_etfs(self, market: str) -> tuple[str, str]:
+        return ((self.us_nasdaq_etf, self.us_sp500_etf) if market == "US"
+                else (self.kr_kospi_etf, self.kr_kosdaq_etf))
+
+    def etfs(self, market: str) -> tuple[str, ...]:
+        return self.safe_assets(market) + self.index_etfs(market)
+
+    def risk_weights(self, market: str) -> tuple[float, ...]:
+        return self.us_risk_weights if market == "US" else self.kr_risk_weights
 
     @property
     def stock_w(self) -> float:
@@ -111,13 +131,27 @@ def stock_weights(ranking: list[str], cfg: Config) -> dict[str, float]:
     return {ticker: weight / total for ticker, weight in pairs if weight > 0} if total > 0 else {}
 
 
-def pocket_weights(stock_w: dict[str, float], market: str, cfg: Config) -> dict[str, float]:
-    """Allocate the pocket between stocks and short- and long-term bonds."""
-    stock_share = cfg.stock_w if stock_w else 0.0
-    short, long = cfg.bonds(market)
-    weights = {ticker: weight * stock_share for ticker, weight in stock_w.items()}
-    weights[short] = (1 - stock_share) * cfg.short_bond_pct / 100
-    weights[long] = (1 - stock_share) * (1 - cfg.short_bond_pct / 100)
+def pocket_weights(stock_w: dict[str, float], market: str, cfg: Config,
+                   available: Collection[str] | None = None) -> dict[str, float]:
+    """Allocate each sleeve among its available assets."""
+    available = set(cfg.etfs(market)) if available is None else set(available)
+    risk = [(t, w) for t, w in zip(cfg.index_etfs(market), cfg.risk_weights(market)[1:])
+            if t in available and w > 0]
+    stock_weight = cfg.risk_weights(market)[0] if stock_w else 0
+    total = stock_weight + sum(w for _, w in risk)
+    weights = {t: cfg.stock_w * stock_weight / total * w for t, w in stock_w.items()
+               if total and stock_weight and w > 0}
+    for t, w in risk:
+        weights[t] = weights.get(t, 0) + cfg.stock_w * w / total
+    safe_share = 1 - cfg.stock_w if total else 1.0
+    safe = [(t, w) for t, w in zip(cfg.safe_assets(market), cfg.safe_weights) if t in available and w > 0]
+    safe_total = sum(w for _, w in safe)
+    if not safe_total:
+        safe = [(cfg.safe_assets(market)[0], 1)]
+        safe_total = 1
+    for t, w in safe:
+        if safe_share:
+            weights[t] = weights.get(t, 0) + safe_share * w / safe_total
     return {ticker: weight for ticker, weight in weights.items() if weight > 0}
 
 

@@ -40,7 +40,7 @@ class FakeSource:
 
 def set_day(src, day, mcaps):
     """mcaps in billions; every stock priced at 100 so qty math stays readable."""
-    src.prices = {t: 100.0 for t in UNIVERSE} | {"SHY": 100.0, "TLT": 100.0}
+    src.prices = {t: 100.0 for t in UNIVERSE} | {"SHY": 100.0, "TLT": 100.0, "GLD": 100.0, "QQQ": 100.0, "SPY": 100.0}
     src.shares_out = {t: mcaps.get(t, 1.0) * 1e9 / 100 for t in UNIVERSE}
     src.quote_time = pd.Timestamp(f"{day} 11:40", tz=NY)
 
@@ -129,7 +129,7 @@ def test_stale_quotes_fail_the_run(env):
     conn, src, cfg = env
     set_day(src, "2026-10-26", {"AAPL": 5000})
     src.quote_time = pd.Timestamp("2026-10-23 15:59", tz=NY)  # last Friday's bar
-    with pytest.raises(jobs.JobError, match="bond ETF"):
+    with pytest.raises(jobs.JobError, match="ETF"):
         jobs.run_signal(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 11:50", tz=NY))
     assert db.run_status(conn, "signal", "US", "2026-10-26") == "FAILED"
 
@@ -880,3 +880,20 @@ def test_suspect_in_top5_still_holds(tmp_path, ticker, price):
     out = signal(conn, src, cfg, "2026-10-27", None)
     assert out.startswith("signal US 2026-10-27 SKIPPED") and f"HOLD (suspect=['{ticker}']" in out
     assert db.load_rank_state(conn, "US", "2026-10-28").confirmed[:5] == ["AAPL", "NVDA", "MSFT", "GOOGL", "AMZN"]
+
+
+def test_weekly_pool_overlap_with_etf_keeps_old_pool(tmp_path, no_real_alerts):
+    conn, src, cfg = pool_env(tmp_path, UNIVERSE)
+    set_pool_day(src, "2026-10-26", TOP3)
+    screen = FakeScreen(("AAPL", "NVDA", "MSFT", "GOOGL", "GLD"))
+    assert " OK" in signal(conn, src, cfg, "2026-10-26", screen)
+    assert db.get_setting(conn, "config")["us_universe"] == list(UNIVERSE)
+    assert any("후보 풀 갱신 실패" in m for m in no_real_alerts)
+
+
+def test_missing_index_etf_quote_fails_signal(env):
+    conn, src, cfg = env
+    set_day(src, "2026-10-26", TOP3)
+    del src.prices["QQQ"]
+    with pytest.raises(jobs.JobError, match="QQQ"):
+        jobs.run_signal(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 11:50", tz=NY))

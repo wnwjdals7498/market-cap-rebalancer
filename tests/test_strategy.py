@@ -45,9 +45,9 @@ def test_stock_weights_renormalize_when_fewer_names():
 def test_pocket_weights_split_bonds():
     stocks = {"A": .5, "B": .5}
     assert pocket_weights(stocks, "US", Config()) == pytest.approx({"A": .3, "B": .3, "SHY": .4})
-    assert pocket_weights(stocks, "US", Config(short_bond_pct=25)) == pytest.approx(
+    assert pocket_weights(stocks, "US", Config(safe_weights=(25, 75, 0))) == pytest.approx(
         {"A": .3, "B": .3, "SHY": .1, "TLT": .3})
-    assert pocket_weights({}, "US", Config(short_bond_pct=25)) == pytest.approx({"SHY": .25, "TLT": .75})
+    assert pocket_weights({}, "US", Config(safe_weights=(25, 75, 0))) == pytest.approx({"SHY": .25, "TLT": .75})
 
 
 def test_plan_moves_caps_sells_and_buys():
@@ -90,3 +90,27 @@ def test_fx_gap_band_and_disabled():
 
 def test_fx_amount_capped_by_step():
     assert fx_amount(-40, 100, Config(step_pct=10)) == 10
+
+
+def test_pocket_weights_defaults_match_old_rule():
+    assert pocket_weights({'A': .5, 'B': .5}, 'US', Config()) == pytest.approx({'A': .3, 'B': .3, 'SHY': .4})
+
+
+def test_pocket_weights_without_stocks_redistributes_to_indexes():
+    cfg = Config(us_risk_weights=(60, 20, 20))
+    assert pocket_weights({}, 'US', cfg) == pytest.approx({'QQQ': .3, 'SPY': .3, 'SHY': .4})
+
+
+def test_pocket_weights_without_stocks_falls_back_to_safe():
+    assert pocket_weights({}, 'US', Config()) == pytest.approx({'SHY': 1})
+
+
+def test_pocket_weights_drops_unavailable_etf():
+    cfg = Config(safe_weights=(80, 0, 20), us_risk_weights=(60, 20, 20))
+    assert pocket_weights({'A': 1}, 'US', cfg, available={'SHY', 'QQQ'}) == pytest.approx({'A': .45, 'QQQ': .15, 'SHY': .4})
+
+
+def test_pocket_weights_drops_zero_weights():
+    stocks = {"A": 0.5, "B": 0.5}
+    assert pocket_weights(stocks, "US", Config(stock_pct=0)) == {"SHY": 1.0}
+    assert pocket_weights(stocks, "US", Config(stock_pct=100)) == {"A": 0.5, "B": 0.5}

@@ -1,4 +1,4 @@
-"""5-year backtest of the rank-weight strategy (top-5 stocks by market cap + short/long bond ETFs).
+"""5-year backtest of the rank-weight strategy (top-5 stocks by market cap + bond, gold and index ETFs).
 
     python backtest.py                      # default: Config values (weekly trades, 10% per trade)
     python backtest.py --rank-weights 100,0,0,0,0 --trade-every day --confirm-days 3
@@ -104,7 +104,8 @@ def run(md: dict[str, pd.DataFrame], cfg: Config, start: str, end: str | None,
             if not trade_due(d.date(), last_trade[m], cfg.trade_every):
                 continue
 
-            weights = pocket_weights(stock_weights(ranking, cfg), m, cfg)
+            weights = pocket_weights(stock_weights(ranking, cfg), m, cfg,
+                                     available={t for t in cfg.etfs(m) if np.isfinite(prices.get(t, np.nan))})
             held = {t for t, u in units.items() if t != CASH and u > 1e-12}
             if not _priced(prices, set(weights) | held):  # retry on the next session
                 continue
@@ -165,18 +166,20 @@ def main() -> None:
     ap.add_argument("--start", default=None, help="default: 5 years before --end/today")
     ap.add_argument("--end", default=None)
     ap.add_argument("--capital", type=float, default=100_000_000, help="initial capital, KRW")
-    for name in ("stock_pct", "us_pct", "band_pp", "step_pct", "short_bond_pct", "fx_band_pp"):
+    for name in ("stock_pct", "us_pct", "band_pp", "step_pct", "fx_band_pp"):
         ap.add_argument("--" + name.replace("_", "-"), type=float, default=getattr(defaults, name))
     for name in ("confirm_days", "fx_wait_days"):
         ap.add_argument("--" + name.replace("_", "-"), type=int, default=getattr(defaults, name))
     ap.add_argument("--rank-weights", default=",".join(f"{w:g}" for w in defaults.rank_weights),
                     help="stock weights for ranks 1..5 (%%), comma separated")
+    for name in ("safe_weights", "us_risk_weights", "kr_risk_weights"):
+        ap.add_argument("--" + name.replace("_", "-"), default=",".join(f"{w:g}" for w in getattr(defaults, name)))
     ap.add_argument("--trade-every", choices=["day", "week", "month"], default=defaults.trade_every)
     ap.add_argument("--no-fx", action="store_true", help="never move cash between the US and KR pockets")
     for name in ("us_universe", "kr_universe"):
         ap.add_argument("--" + name.replace("_", "-"), type=_tickers, default=getattr(defaults, name),
                         help="comma separated tickers")
-    for name in ("us_short_bond", "us_long_bond", "kr_short_bond", "kr_long_bond"):
+    for name in ("us_short_bond", "us_long_bond", "kr_short_bond", "kr_long_bond", "us_gold", "kr_gold", "us_nasdaq_etf", "us_sp500_etf", "kr_kospi_etf", "kr_kosdaq_etf"):
         ap.add_argument("--" + name.replace("_", "-"), default=getattr(defaults, name))
     ap.add_argument("--no-cost", action="store_true", help="zero fees/taxes/fx spread")
     ap.add_argument("--refresh", action="store_true", help="re-download data")
@@ -187,7 +190,12 @@ def main() -> None:
     fetch_start = str((pd.Timestamp(start) - pd.DateOffset(days=40)).date())
 
     cfg = Config(stock_pct=a.stock_pct, us_pct=a.us_pct, band_pp=a.band_pp, step_pct=a.step_pct,
-                 confirm_days=a.confirm_days, short_bond_pct=a.short_bond_pct, fx_band_pp=a.fx_band_pp,
+                 confirm_days=a.confirm_days, fx_band_pp=a.fx_band_pp,
+                 safe_weights=tuple(float(w) for w in a.safe_weights.split(",")),
+                 us_risk_weights=tuple(float(w) for w in a.us_risk_weights.split(",")),
+                 kr_risk_weights=tuple(float(w) for w in a.kr_risk_weights.split(",")),
+                 us_gold=a.us_gold, kr_gold=a.kr_gold, us_nasdaq_etf=a.us_nasdaq_etf,
+                 us_sp500_etf=a.us_sp500_etf, kr_kospi_etf=a.kr_kospi_etf, kr_kosdaq_etf=a.kr_kosdaq_etf,
                  fx_wait_days=a.fx_wait_days, trade_every=a.trade_every, fx_enabled=not a.no_fx,
                  rank_weights=tuple(float(w) for w in a.rank_weights.split(",")),
                  us_universe=a.us_universe, kr_universe=a.kr_universe,
@@ -197,12 +205,17 @@ def main() -> None:
     if a.no_cost:
         cfg = replace(cfg, us_fee=0, kr_fee=0, kr_stock_sell_tax=0, fx_spread=0)
 
-    bonds = [*cfg.bonds("US"), *cfg.bonds("KR")]
+    bonds = [*cfg.etfs("US"), *cfg.etfs("KR")]
     md = data.load_market_data(fetch_start, a.end, extra=[*bonds, US_INDEX, KR_INDEX], refresh=a.refresh,
                                mcap_tickers=[*cfg.us_universe, *cfg.kr_universe])
 
     scenarios = {
         "전략 (설정값)": cfg,
+        "안전자산 단기채 80 / 금 20": replace(cfg, safe_weights=(80, 0, 20)),
+        "위험자산 60/20/20 (지수 ETF)": replace(cfg, us_risk_weights=(60, 20, 20), kr_risk_weights=(60, 20, 20)),
+        "운용 설정 (일간, 이동 5%, 허용 3%p, 대기 1일, 위험 60/20/20, 안전 80/0/20, 환전 끔)": replace(
+            cfg, trade_every="day", step_pct=5, band_pp=3, confirm_days=1, safe_weights=(80, 0, 20),
+            us_risk_weights=(60, 20, 20), kr_risk_weights=(60, 20, 20), fx_enabled=False),
         "1위 단독 (100/0/0/0/0)": replace(cfg, rank_weights=(100, 0, 0, 0, 0)),
         "순위 대기 3일": replace(cfg, confirm_days=3),
         "매매 일간": replace(cfg, trade_every="day"),

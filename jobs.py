@@ -161,7 +161,7 @@ def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source,
         nonlocal cfg
         cfg = refresh_pool(conn, mkt, session, cfg, screen)
         tz = session_times(mkt, session).open.tz
-        universe, bonds = list(cfg.universe(mkt.code)), list(cfg.bonds(mkt.code))
+        universe, bonds = list(cfg.universe(mkt.code)), list(cfg.etfs(mkt.code))
         retired = retired_of(conn, mkt)
         units = managed(broker.balance(mkt.code) if broker else db.latest_positions(conn, mkt.code)[1],
                         mkt, cfg, retired)
@@ -172,7 +172,7 @@ def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source,
         quotes = fresh_quotes(src, universe + bonds + held, session, str(tz), now)
         no_bond = [t for t in bonds if t not in quotes]
         if no_bond:
-            raise JobError(f"no fresh quote for bond ETF {no_bond}")
+            raise JobError(f"no fresh quote for ETF {no_bond}")
 
         prev = db.previous_mcaps(conn, mkt.code, session)
         rows, valid, suspect, mcaps = [], {}, [], {}
@@ -263,9 +263,9 @@ def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source,
 
 
 def managed(units: dict[str, float], mkt: Market, cfg: Config, retired: dict[str, str]) -> dict[str, float]:
-    """Holdings this strategy may trade: candidates, the two bond ETFs, tickers being retired and cash.
+    """Holdings this strategy may trade: candidates, the ETFs, tickers being retired and cash.
     Anything else in the account (the user's own positions) is left untouched."""
-    keep = set(cfg.universe(mkt.code)) | set(cfg.bonds(mkt.code)) | set(retired) | {CASH}
+    keep = set(cfg.universe(mkt.code)) | set(cfg.etfs(mkt.code)) | set(retired) | {CASH}
     other = sorted(t for t, q in units.items() if t not in keep and q)
     if other:
         log.warning("%s: ignoring holdings outside the strategy: %s", mkt.code, other)
@@ -306,7 +306,7 @@ def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source
         if not targets:
             return "SKIPPED", NO_TRADE
         retired = retired_of(conn, mkt)
-        allowed = set(cfg.universe(mkt.code)) | set(cfg.bonds(mkt.code)) | set(retired)
+        allowed = set(cfg.universe(mkt.code)) | set(cfg.etfs(mkt.code)) | set(retired)
         stale = sorted(set(targets) - allowed)
         if stale:  # the lists changed after the signal: never trade what the strategy no longer manages
             log.warning("%s %s: dropping stored targets outside the strategy: %s", mkt.code, session, stale)
@@ -323,7 +323,7 @@ def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source
             raise JobError(f"no fresh quote for {missing}")
         prices = {t: q.price for t, q in quotes.items()}
         plan = plan_orders(targets, units, prices, cfg)
-        etfs = set(cfg.bonds(mkt.code)) | {t for t, role in retired.items() if role == "bond"}
+        etfs = set(cfg.etfs(mkt.code)) | {t for t, role in retired.items() if role != "stock"}
 
         if dry_run:
             for t, delta in plan:

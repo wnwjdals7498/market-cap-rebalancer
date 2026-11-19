@@ -26,16 +26,18 @@ KR_TICKER = r"^\d{6}\.KS$"  # bonds/ETFs
 KR_STOCK = r"^\d{5}0\.KS$"  # KOSPI common stock
 SOURCES = ("web", "cli", "system", "migration")
 LIMITS: dict[str, dict[str, Any]] = {
-    "stock_pct": {"type": "float", "label": "주식 비중 (%)", "min": 0, "max": 100},
+    "stock_pct": {"type": "float", "label": "위험자산 비중 (%)", "min": 0, "max": 100},
     "us_pct": {"type": "float", "label": "미국 포켓 비중 (%)", "min": 0, "max": 100},
-    "band_pp": {"type": "float", "label": "주식/채권 허용 오차 (%p)", "min": 0, "max": 50},
+    "band_pp": {"type": "float", "label": "위험자산/안전자산 허용 오차 (%p)", "min": 0, "max": 50},
     "step_pct": {"type": "float", "label": "매매 1회 최대 이동량 (포켓 대비 %)", "min": 1, "max": 100},
     "confirm_days": {"type": "int", "label": "순위 변경 대기일", "min": 0, "max": 30},
     "min_trade_pct": {"type": "float", "label": "최소 주문 크기 (포켓 대비 %)", "min": 0, "max": 10},
     "us_fee": {"type": "float", "label": "미국 수수료율", "min": 0, "max": 0.05},
     "kr_fee": {"type": "float", "label": "한국 수수료율", "min": 0, "max": 0.05},
-    "rank_weights": {"type": "weights", "label": "순위별 주식 비율 (1~5위, 합 100)", "min": 0, "max": 100},
-    "short_bond_pct": {"type": "float", "label": "채권 중 단기채 비율 (%)", "min": 0, "max": 100},
+    "rank_weights": {"type": "weights", "label": "순위별 주식 비율 (1~5위, 합 100)", "min": 0, "max": 100, "slots": 5},
+    "safe_weights": {"type": "weights", "label": "안전자산 비율 (단기채/장기채/금, 합 100)", "min": 0, "max": 100, "slots": 3},
+    "us_risk_weights": {"type": "weights", "label": "미국 위험자산 비율 (개별주/나스닥/S&P500, 합 100)", "min": 0, "max": 100, "slots": 3},
+    "kr_risk_weights": {"type": "weights", "label": "한국 위험자산 비율 (개별주/코스피/코스닥, 합 100)", "min": 0, "max": 100, "slots": 3},
     "trade_every": {"type": "choice", "label": "매매 주기", "options": ["day", "week", "month"]},
     "fx_band_pp": {"type": "float", "label": "환전 허용 오차 (%p)", "min": 0, "max": 50},
     "fx_enabled": {"type": "bool", "label": "환전 안내 사용"},
@@ -48,8 +50,13 @@ LIMITS: dict[str, dict[str, Any]] = {
     "us_long_bond": {"type": "ticker", "label": "미국 장기채", "market": "US"},
     "kr_short_bond": {"type": "ticker", "label": "한국 단기채", "market": "KR"},
     "kr_long_bond": {"type": "ticker", "label": "한국 장기채", "market": "KR"},
+    "us_gold": {"type": "ticker", "label": "미국 금 ETF", "market": "US"},
+    "kr_gold": {"type": "ticker", "label": "한국 금 ETF", "market": "KR"},
+    "us_nasdaq_etf": {"type": "ticker", "label": "미국 나스닥 ETF", "market": "US"},
+    "us_sp500_etf": {"type": "ticker", "label": "미국 S&P500 ETF", "market": "US"},
+    "kr_kospi_etf": {"type": "ticker", "label": "한국 코스피 ETF", "market": "KR"},
+    "kr_kosdaq_etf": {"type": "ticker", "label": "한국 코스닥 ETF", "market": "KR"},
 }
-RANK_SLOTS = 5
 # Settings the 2-stage strategy replaced; `migrate` drops them from a stored config.
 OLD_KEYS = ("pair_confirm_days", "solo_after_days", "us_bond", "kr_bond", "fx_mode")
 OLD_STOCKS = {
@@ -57,7 +64,7 @@ OLD_STOCKS = {
     "KR": ("005930.KS", "000660.KS", "373220.KS", "207940.KS", "005380.KS"),
 }
 OLD_BONDS = {"US": "IEF", "KR": "148070.KS"}
-CONFIG_VERSION = 2
+CONFIG_VERSION = 3
 FX_PLAN = "fx:plan"  # {"from": "US"|"KR", "amount": <source pocket currency>, "created": date, "ready": date|None}
 
 
@@ -84,8 +91,8 @@ def validate_config(key: str, value):
             raise ControlError(f"{key} 값은 {'/'.join(limit['options'])} 중 하나여야 합니다")
         return value
     if kind == "weights":
-        if not isinstance(value, list) or len(value) != RANK_SLOTS or not all(is_number(w) for w in value):
-            raise ControlError(f"{key} 는 숫자 {RANK_SLOTS}개여야 합니다")
+        if not isinstance(value, list) or len(value) != limit["slots"] or not all(is_number(w) for w in value):
+            raise ControlError(f"{key} 는 숫자 {limit['slots']}개여야 합니다")
         if any(not limit["min"] <= w <= limit["max"] for w in value):
             raise ControlError(f"허용 범위를 벗어난 값입니다: {key}")
         if abs(sum(value) - 100) > 1e-6:
@@ -106,21 +113,17 @@ def validate_config(key: str, value):
 
 
 def roles(config: dict, market: str) -> dict[str, str]:
-    """Managed tickers of one market with their role (stock or bond)."""
-    prefix = market.lower()
-    out = {t: "stock" for t in config[f"{prefix}_universe"]}
-    out |= {config[f"{prefix}_short_bond"]: "bond", config[f"{prefix}_long_bond"]: "bond"}
-    return out
+    """Managed stock and ETF tickers of one market."""
+    cfg = Config(**{k: tuple(v) if isinstance(v, list) else v for k, v in config.items() if k in Config.__dataclass_fields__})
+    return {t: "stock" for t in cfg.universe(market)} | {t: "etf" for t in cfg.etfs(market)}
 
 
 def check_universe(config: dict) -> None:
+    cfg = Config(**{k: tuple(v) if isinstance(v, list) else v for k, v in config.items() if k in Config.__dataclass_fields__})
     for market in ("US", "KR"):
-        prefix = market.lower()
-        short, long = config[f"{prefix}_short_bond"], config[f"{prefix}_long_bond"]
-        if short == long:
-            raise ControlError(f"{market} 단기채와 장기채는 서로 달라야 합니다")
-        if {short, long} & set(config[f"{prefix}_universe"]):
-            raise ControlError(f"{market} 채권은 주식 후보와 겹칠 수 없습니다")
+        etfs = cfg.etfs(market)
+        if len(set(etfs)) != len(etfs) or set(etfs) & set(cfg.universe(market)):
+            raise ControlError(f"{market} ETF는 서로 또는 주식 후보와 겹칠 수 없습니다")
 
 
 def retire_removed(conn: sqlite3.Connection, before: dict, after: dict) -> None:
@@ -249,14 +252,14 @@ def update(conn: sqlite3.Connection, changes: dict, source: str, confirm: str | 
 
 
 def migrate(conn: sqlite3.Connection, today: str | None = None) -> bool:
-    """Move a stored pre-rank-weights config to version 2 once; return True if anything changed.
+    """Migrate old settings to version 3 once; return True if anything changed.
     `today` (KST date, default now) becomes `rank:since`: executes before it are old-strategy trades
     and must not count as this week's trade."""
     today = today or datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
     if db.get_setting(conn, "config:version", 0) >= CONFIG_VERSION:
         return False
     saved = db.get_setting(conn, "config", {})
-    if not any(key in saved for key in OLD_KEYS):  # new DB: nothing to carry over
+    if not any(key in saved for key in (*OLD_KEYS, "short_bond_pct")):  # nothing to carry over
         db.set_setting(conn, "config:version", CONFIG_VERSION)
         return False
     recorded = []
@@ -268,25 +271,34 @@ def migrate(conn: sqlite3.Connection, today: str | None = None) -> bool:
         defaults = asdict(Config())
         effective = snapshot(conn)["config"]
         migrated = {key: value for key, value in saved.items() if key not in OLD_KEYS}
-        migrated |= {"confirm_days": 0, "us_pct": 60.0}
+        legacy = db.get_setting(conn, "config:version", 0) < 2 and any(key in saved for key in OLD_KEYS)
+        if legacy:
+            migrated |= {"confirm_days": 0, "us_pct": 60.0}
+        if "short_bond_pct" in migrated:
+            pct = migrated.pop("short_bond_pct")
+            migrated["safe_weights"] = [pct, 100 - pct, 0]
+            db.log_setting_change(conn, "config.short_bond_pct", pct, None, "migration")
+            db.log_setting_change(conn, "config.safe_weights", None, migrated["safe_weights"], "migration")
+            recorded.append("config.short_bond_pct → config.safe_weights")
         for key in OLD_KEYS:
             if key in saved:
                 db.log_setting_change(conn, f"config.{key}", saved[key], None, "migration")
                 recorded.append(f"config.{key} 삭제")
-        for key in ("confirm_days", "us_pct"):
+        for key in (("confirm_days", "us_pct") if legacy else ()):
             old = saved.get(key, defaults[key])
             if old != migrated[key]:
                 db.log_setting_change(conn, f"config.{key}", old, migrated[key], "migration")
                 recorded.append(f"config.{key} {old} → {migrated[key]}")
         retired = db.get_setting(conn, "retired", {})
-        for market in ("US", "KR"):
+        for market in (("US", "KR") if legacy else ()):
             old = {t: "stock" for t in OLD_STOCKS[market]}
             old |= {saved.get(f"{market.lower()}_bond", OLD_BONDS[market]): "bond", OLD_BONDS[market]: "bond"}
             new = roles(effective, market)
             retired[market] = retired.get(market, {}) | {t: r for t, r in old.items() if t not in new}
         conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", ("config", json.dumps(migrated)))
-        conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", ("retired", json.dumps(retired)))
+        if legacy:
+            conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", ("retired", json.dumps(retired)))
+            conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", ("rank:since", json.dumps(today)))
         conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", ("config:version", json.dumps(CONFIG_VERSION)))
-        conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", ("rank:since", json.dumps(today)))
     notify.send("⚙️ 설정 이관 (migration): " + ", ".join(recorded) + f" | 정리 대상 {retired}")
     return True

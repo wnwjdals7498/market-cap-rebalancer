@@ -280,7 +280,7 @@ def build_html(conn: sqlite3.Connection, usdkrw: float | None = None, version: s
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>투자 리포트</title>
 <style>{CSS % {"light": light, "dark": dark}}</style></head>
 <body{f' data-version="{esc(version)}"' if version else ""}><main>
-<h1>투자 리포트</h1><p class="sub">시총 1위 + 채권 ETF 리밸런싱 · 생성 {esc(generated)} · 평가는 마지막 체결 시점 가격
+<h1>투자 리포트</h1><p class="sub">시총 상위 주식 + ETF 리밸런싱 · 생성 {esc(generated)} · 평가는 마지막 체결 시점 가격
 {'<span id="live" class="pill good"></span>' if version else ""}</p>
 <div class="tiles">{tile_html}</div>
 <section class="card"><h2>총자산 추이 (원화 환산)</h2>{equity_chart}</section>

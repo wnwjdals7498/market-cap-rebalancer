@@ -70,3 +70,15 @@ def test_backtest_fx_moves_cash_toward_us_pct():
     assert abs(us_share(on) - 0.6) < abs(us_share(off) - 0.6)
     assert on["cost_krw"] > off["cost_krw"]  # exchange spread paid
     assert on["curve"]["kr_krw"].iloc[-1] > off["curve"]["kr_krw"].iloc[-1]
+
+
+def test_backtest_renormalizes_etfs_before_listing():
+    md = make_md(10)
+    for ticker in ("GLD", "411060.KS"):
+        md["adj"][ticker] = 100.0
+        md["adj"].loc[md["adj"].index[:5], ticker] = np.nan
+    cfg = Config(**{**CFG.__dict__, "trade_every": "day", "safe_weights": (80, 0, 20), "step_pct": 100})
+    curve = backtest.run(md, cfg, "2024-01-01", "2024-01-12", 1e6)["curve"]
+    assert curve["total_krw"].notna().all()
+    assert curve["KR:411060.KS"].iloc[:5].fillna(0).eq(0).all()
+    assert curve["KR:411060.KS"].iloc[-1] > 0
