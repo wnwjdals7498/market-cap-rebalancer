@@ -26,6 +26,8 @@ KR_TICKER = r"^\d{6}\.KS$"  # bonds/ETFs
 KR_STOCK = r"^\d{5}0\.KS$"  # KOSPI common stock
 SOURCES = ("web", "cli", "system", "migration")
 LIMITS: dict[str, dict[str, Any]] = {
+    "flow_min_krw": {"type": "float", "label": "입출금 감지 최소 금액 (원)", "min": 0, "max": 10000000},
+    "flow_min_usd": {"type": "float", "label": "입출금 감지 최소 금액 (달러)", "min": 0, "max": 10000},
     "stock_pct": {"type": "float", "label": "위험자산 비중 (%)", "min": 0, "max": 100},
     "us_pct": {"type": "float", "label": "미국 포켓 비중 (%)", "min": 0, "max": 100},
     "band_pp": {"type": "float", "label": "위험자산/안전자산 허용 오차 (%p)", "min": 0, "max": 50},
@@ -249,6 +251,68 @@ def update(conn: sqlite3.Connection, changes: dict, source: str, confirm: str | 
     if recorded:
         notify.send(f"⚙️ 설정 변경 ({source}): " + ", ".join(recorded))
     return result
+
+
+def cash_amount(amount: float, market: str, signed: bool = False) -> str:
+    sign = "+" if signed else ""
+    if market == "KR":
+        return f"{amount:{sign},.0f}원"
+    return f"{amount:{sign},.2f}달러"
+
+
+def cash_state(conn: sqlite3.Connection) -> dict:
+    defaults = {"KR": 0.0, "US": 0.0}
+    return {"reserve": defaults | db.get_setting(conn, "cash", {}),
+            "pending": {"KR": False, "US": False} | db.get_setting(conn, "cash:pending", {}),
+            "principal": defaults | db.get_setting(conn, "cash:principal", {})}
+
+
+def cash_command(conn: sqlite3.Connection, market: str, action: str, amount: float, source: str) -> dict:
+    if market not in ("KR", "US") or action not in ("reserve", "invest", "set") or source not in SOURCES:
+        raise ControlError("현금 명령이 올바르지 않습니다")
+    if not is_number(amount) or amount < 0 or (action != "set" and amount == 0):
+        raise ControlError("현금 금액이 올바르지 않습니다")
+    with conn:
+        conn.execute("BEGIN IMMEDIATE")
+        state = cash_state(conn)
+        old = state["reserve"][market]
+        new = old + amount if action == "reserve" else old - amount if action == "invest" else amount
+        if new < 0:
+            raise ControlError("보관 현금이 부족합니다")
+        if action == "reserve":
+            row = conn.execute("SELECT SUM(value) FROM positions WHERE market = ? AND date = (SELECT MAX(date) FROM positions WHERE market = ?)", (market, market)).fetchone()
+            if row[0] is None or new > row[0]:
+                raise ControlError("최근 평가 총액을 초과합니다")
+        state["reserve"][market] = new
+        state["pending"][market] = True
+        principal = db.get_setting(conn, "cash:principal", {})
+        if market in principal:
+            principal[market] += old - new
+            conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", ("cash:principal", json.dumps(principal)))
+        for key, value in (("cash", state["reserve"]), ("cash:pending", state["pending"])):
+            conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", (key, json.dumps(value)))
+        db.log_setting_change(conn, f"cash.{market}", old, new, source)
+    notify.send(f"💵 {market} 보관 현금 변경 ({source}): {cash_amount(old, market)} → {cash_amount(new, market)}")
+    return cash_state(conn)
+
+
+def record_flow(conn: sqlite3.Connection, market: str, delta: float, source: str = "system") -> None:
+    if market not in ("KR", "US") or not is_number(delta) or source not in SOURCES:
+        raise ControlError("입출금 정보가 올바르지 않습니다")
+    with conn:
+        conn.execute("BEGIN IMMEDIATE")
+        state = cash_state(conn)
+        old = state["reserve"][market]
+        new = max(0.0, old + delta)
+        state["reserve"][market] = new
+        principal = db.get_setting(conn, "cash:principal", {})
+        if market in principal and delta < -old:
+            principal[market] += delta + old
+            conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", ("cash:principal", json.dumps(principal)))
+        conn.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", ("cash", json.dumps(state["reserve"])))
+        db.log_setting_change(conn, f"cash.{market}", old, new, source)
+    notify.send(f"💵 {market} {'입금' if delta > 0 else '인출'} 감지 {cash_amount(delta, market, signed=True)}"
+                f" → 보관 현금 {cash_amount(new, market)}")
 
 
 def migrate(conn: sqlite3.Connection, today: str | None = None) -> bool:

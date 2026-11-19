@@ -151,6 +151,39 @@ def _guarded(job: str, conn: sqlite3.Connection, mkt: Market | str, session: str
     return f"{job} {code} {session} {status}: {detail}"
 
 
+def observe_cash(conn: sqlite3.Connection, market: str, cash: float, now: pd.Timestamp,
+                 cfg: Config, detect: bool = True) -> None:
+    observed = db.get_setting(conn, "cash:observed", {})
+    previous = observed.get(market)
+    minimum = cfg.flow_min_krw if market == "KR" else cfg.flow_min_usd
+    if detect and previous is not None:
+        delta = cash - previous["cash"]
+        if delta and abs(delta) >= minimum:
+            control.record_flow(conn, market, delta)
+    observed[market] = {"cash": cash, "at": now.isoformat()}
+    db.set_setting(conn, "cash:observed", observed)
+
+
+class ReserveBroker:
+    """Restrict buying power while preserving the broker's actual account balance."""
+    def __init__(self, broker: Broker, reserve: float, cfg: Config):
+        self.broker, self.reserve, self.cfg = broker, reserve, cfg
+        self.order_attempted = False
+
+    def place(self, market: str, ticker: str, side: str, qty: int, price: float) -> str:
+        # A request may reach the broker even if place raises before returning an order number.
+        self.order_attempted = True
+        return self.broker.place(market, ticker, side, qty, price)
+
+    def __getattr__(self, name):
+        return getattr(self.broker, name)
+
+    def buying_power(self, market: str, ticker: str, price: float) -> int:
+        cash = max(0.0, self.broker.balance(market).get(CASH, 0.0) - self.reserve)
+        per_share = price + trade_cost(self.cfg, market, ticker, price)
+        return min(self.broker.buying_power(market, ticker, price), math.floor(cash / per_share))
+
+
 def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source, cfg: Config,
                now: pd.Timestamp, force: bool = False, broker: Broker | None = None,
                screen=screener.screen_top) -> str:
@@ -167,6 +200,7 @@ def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source,
                         mkt, cfg, retired)
         if not units:
             raise JobError("no positions; run `jobs.py init` first")
+        observe_cash(conn, mkt.code, units.get(CASH, 0.0), now, cfg)
         held = [t for t in retired if units.get(t)]
         shares = refresh_shares(conn, mkt, session, src, cfg)
         quotes = fresh_quotes(src, universe + bonds + held, session, str(tz), now)
@@ -227,6 +261,12 @@ def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source,
             raise JobError(f"no fresh quote for held {missing}")
         if broker:
             db.save_positions(conn, session, mkt.code, units, prices)
+        reserve = control.cash_state(conn)["reserve"][mkt.code]
+        principal = db.get_setting(conn, "cash:principal", {})
+        if mkt.code not in principal:
+            principal[mkt.code] = pocket_value(units, prices) - reserve
+            db.set_setting(conn, "cash:principal", principal)
+        units[CASH] = units.get(CASH, 0.0) - reserve
         value = pocket_value(units, prices)
         investable = value
         plan = db.get_setting(conn, FX_PLAN)
@@ -239,19 +279,23 @@ def run_signal(conn: sqlite3.Connection, mkt: Market, session: str, src: Source,
 
         top = " > ".join(t for t, _ in ranked[:3])
         last = db.last_trade_date(conn, mkt.code, before=session)
-        if not trade_due(dt_date.fromisoformat(session), dt_date.fromisoformat(last) if last else None,
+        pending = control.cash_state(conn)["pending"][mkt.code]
+        if not pending and not trade_due(dt_date.fromisoformat(session), dt_date.fromisoformat(last) if last else None,
                          cfg.trade_every):
             db.save_targets(conn, session, mkt.code, {})  # a forced re-run must not leave an earlier plan behind
             tail = f"no trade ({cfg.trade_every})"
         else:
             weights = pocket_weights(stock_weights(confirmed, cfg), mkt.code, cfg)
-            target = plan_moves(units, prices, weights, cfg, investable)
+            target = plan_moves(units, prices, weights, cfg, investable,
+                                cash_flow=abs(units.get(CASH, 0.0)) if pending else 0.0)
             if value > 0:
                 db.save_targets(conn, session, mkt.code, {t: (v / value, prices[t]) for t, v in target.items()})
                 tail = "target " + ", ".join(f"{t} {v / value:.1%}"
                                              for t, v in sorted(target.items(), key=lambda kv: -kv[1]))
             else:
-                db.save_targets(conn, session, mkt.code, {})
+                # A fully reserved account still needs a target to liquidate its holdings.
+                held_targets = {t: (0.0, prices[t]) for t in units if t != CASH and units[t] > 0}
+                db.save_targets(conn, session, mkt.code, held_targets if pending else {})
                 tail = "target none (empty pocket)"
         done = [t for t in retired if not units.get(t)]
         if done:
@@ -304,6 +348,8 @@ def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source
             raise JobError("signal has not completed for this session")
         targets = db.load_targets(conn, session, mkt.code)
         if not targets:
+            balance = broker.balance(mkt.code) if broker else db.latest_positions(conn, mkt.code)[1]
+            observe_cash(conn, mkt.code, balance.get(CASH, 0.0), now, cfg)
             return "SKIPPED", NO_TRADE
         retired = retired_of(conn, mkt)
         allowed = set(cfg.universe(mkt.code)) | set(cfg.etfs(mkt.code)) | set(retired)
@@ -315,6 +361,10 @@ def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source
                 raise JobError(f"stored targets name no managed ticker {stale}; run the signal again")
         units = managed(broker.balance(mkt.code) if broker else db.latest_positions(conn, mkt.code)[1],
                         mkt, cfg, retired)
+        observe_cash(conn, mkt.code, units.get(CASH, 0.0), now, cfg)
+        reserve = control.cash_state(conn)["reserve"][mkt.code]
+        raw_units = units.copy()
+        units[CASH] = units.get(CASH, 0.0) - reserve
         tickers = sorted((set(targets) | set(units)) - {CASH})
         tz = str(session_times(mkt, session).open.tz)
         quotes = fresh_quotes(src, tickers, session, tz, now)
@@ -323,6 +373,20 @@ def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source
             raise JobError(f"no fresh quote for {missing}")
         prices = {t: q.price for t, q in quotes.items()}
         plan = plan_orders(targets, units, prices, cfg)
+        # Rounding toward current holdings can leave the reserve underfunded.
+        deficit = max(0.0, -units.get(CASH, 0.0))
+        if deficit:
+            sales = {t: -d for t, d in plan if d < 0}
+            proceeds = sum(q * prices[t] - trade_cost(cfg, mkt.code, t, -q * prices[t])
+                           for t, q in sales.items())
+            for t in sorted(set(units) - {CASH}):
+                available = int(units[t]) - sales.get(t, 0)
+                net = prices[t] - trade_cost(cfg, mkt.code, t, -prices[t])
+                extra = min(available, max(0, math.ceil((deficit - proceeds) / net - 1e-9)))
+                if extra:
+                    sales[t] = sales.get(t, 0) + extra
+                    proceeds += extra * net
+            plan = [(t, d) for t, d in plan if d > 0] + [(t, -q) for t, q in sales.items()]
         etfs = set(cfg.etfs(mkt.code)) | {t for t, role in retired.items() if role != "stock"}
 
         if dry_run:
@@ -334,8 +398,17 @@ def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source
                                      "status": "PLANNED"})
             return "OK", "DRY_RUN " + ("; ".join(f"{t} {d:+d}@{prices[t]:,.2f}" for t, d in plan) or "no orders")
 
-        b = broker or SimBroker({mkt.code: units}, prices, cfg)
-        results = execute(b, mkt.code, plan, prices, etfs=etfs, params=params, sleep=sleep)
+        b = broker or SimBroker({mkt.code: raw_units}, prices, cfg)
+        guarded_broker = ReserveBroker(b, reserve, cfg)
+        try:
+            results = execute(guarded_broker, mkt.code, plan, prices, etfs=etfs, params=params, sleep=sleep)
+        finally:
+            if guarded_broker.order_attempted:
+                try:
+                    balance = b.balance(mkt.code)
+                    observe_cash(conn, mkt.code, balance.get(CASH, 0.0), now, cfg, detect=False)
+                except Exception:
+                    log.exception("%s: failed to reobserve cash after order", mkt.code)
         for r in results:
             for o in r.orders:
                 fill_px = o["fill_price"] or o["limit_price"]
@@ -349,6 +422,11 @@ def run_execute(conn: sqlite3.Connection, mkt: Market, session: str, src: Source
                                      "broker_order_no": o["broker_order_no"]})
         new_units = managed(b.balance(mkt.code), mkt, cfg, retired)
         db.save_positions(conn, session, mkt.code, new_units, prices)
+        state = control.cash_state(conn)
+        minimum = cfg.flow_min_krw if mkt.code == "KR" else cfg.flow_min_usd
+        if new_units.get(CASH, 0.0) - state["reserve"][mkt.code] >= -minimum:
+            state["pending"][mkt.code] = False
+            db.set_setting(conn, "cash:pending", state["pending"])
         fills = "; ".join(f"{r.side} {r.ticker} {r.filled}/{r.wanted}@{r.avg_price or 0:,.2f}" for r in results)
         # buys capped by cash (fees above the model, fills up the ladder) are expected, not a failure
         capped = [r.ticker for r in results if r.filled < r.wanted and r.cash_limited]
@@ -554,7 +632,8 @@ def status(conn: sqlite3.Connection) -> str:
     lines = [f"broker {t['broker']} submit={t['submit']} allow_real={t['allow_real']}",
              f"paused KR={paused['KR']} US={paused['US']}"]
     for code in MARKETS:
-        lines.append(f"[{code}]")
+        state = control.cash_state(conn)
+        lines.append(f"[{code}] reserve={state['reserve'][code]} pending={state['pending'][code]}")
         for r in conn.execute("SELECT * FROM runs WHERE market = ? ORDER BY session_date DESC, job DESC LIMIT 4",
                               (code,)):
             lines.append(f"  run {r['session_date']} {r['job']:7s} {r['status']:7s} {r['detail'] or ''}")
@@ -601,6 +680,11 @@ def main() -> None:
         p.add_argument("--force", action="store_true")
     sub.add_parser("tick")
     sub.add_parser("status")
+    p = sub.add_parser("cash", help="manage reserved cash")
+    p.add_argument("--market", choices=list(MARKETS))
+    cash_group = p.add_mutually_exclusive_group()
+    for action in ("reserve", "invest", "set"):
+        cash_group.add_argument("--" + action, type=float)
     p = sub.add_parser("web", help="investment report web page (site/index.html; --serve for a local server)")
     p.add_argument("--serve", action="store_true")
     p.add_argument("--host", action="append",
@@ -643,6 +727,15 @@ def main() -> None:
         return
     if a.cmd == "status":
         print(status(conn))
+        return
+    if a.cmd == "cash":
+        actions = [(name, getattr(a, name)) for name in ("reserve", "invest", "set") if getattr(a, name) is not None]
+        if actions:
+            if not a.market:
+                ap.error("cash action requires --market")
+            print(control.cash_command(conn, a.market, actions[0][0], actions[0][1], "cli"))
+        else:
+            print(control.cash_state(conn))
         return
     if a.cmd == "web":
         print(f"wrote {webreport.write_site(conn, SITE_DIR)}")

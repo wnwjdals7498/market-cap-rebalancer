@@ -227,3 +227,35 @@ def test_etfs_cannot_overlap_each_other_or_stocks(tmp_path):
         control.update(conn, {'config': {'us_gold': 'SHY'}}, 'cli')
     with pytest.raises(control.ControlError):
         control.update(conn, {'config': {'us_gold': 'AAPL'}}, 'cli')
+
+
+def test_cash_commands_validate_and_log(conn, no_real_alerts):
+    db.save_positions(conn, "2026-11-19", "US", {"CASH": 1000}, {})
+    for action, amount in (("reserve", -1), ("reserve", 1001), ("invest", 1), ("set", -1)):
+        with pytest.raises(control.ControlError):
+            control.cash_command(conn, "US", action, amount, "cli")
+    result = control.cash_command(conn, "US", "reserve", 500, "cli")
+    assert result["reserve"]["US"] == 500
+    assert result["pending"]["US"] is True
+    assert db.setting_changes(conn)[0]["key"] == "cash.US"
+    assert no_real_alerts
+
+
+@pytest.mark.parametrize("market,amount,expected", [
+    ("KR", 5_000_000, "💵 KR 보관 현금 변경 (cli): 0원 → 5,000,000원"),
+    ("US", 1234.56, "💵 US 보관 현금 변경 (cli): 0.00달러 → 1,234.56달러"),
+])
+def test_cash_command_notification_format(conn, no_real_alerts, market, amount, expected):
+    control.cash_command(conn, market, "set", amount, "cli")
+    assert no_real_alerts[-1] == expected
+
+
+@pytest.mark.parametrize("market,delta,expected", [
+    ("KR", 5_000_000, "💵 KR 입금 감지 +5,000,000원 → 보관 현금 5,000,000원"),
+    ("US", 1234.56, "💵 US 입금 감지 +1,234.56달러 → 보관 현금 1,234.56달러"),
+    ("KR", -5000, "💵 KR 인출 감지 -5,000원 → 보관 현금 0원"),
+    ("US", -1234.56, "💵 US 인출 감지 -1,234.56달러 → 보관 현금 0.00달러"),
+])
+def test_cash_flow_notification_format(conn, no_real_alerts, market, delta, expected):
+    control.record_flow(conn, market, delta)
+    assert no_real_alerts[-1] == expected

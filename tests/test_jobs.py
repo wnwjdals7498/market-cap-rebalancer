@@ -897,3 +897,195 @@ def test_missing_index_etf_quote_fails_signal(env):
     del src.prices["QQQ"]
     with pytest.raises(jobs.JobError, match="QQQ"):
         jobs.run_signal(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 11:50", tz=NY))
+
+
+def test_reserve_increase_sells_deficit_at_next_execute(env):
+    conn, src, cfg = env
+    run_day(conn, src, cfg, "2026-10-26", TOP3)
+    control.cash_command(conn, "US", "reserve", 30_000, "cli")
+    units = run_day(conn, src, cfg, "2026-10-27", TOP3)
+    assert units[CASH] >= 30_000
+
+
+def test_invest_conversion_buys_at_next_execute(env):
+    conn, src, cfg = env
+    control.cash_command(conn, "US", "set", 30_000, "cli")
+    run_day(conn, src, cfg, "2026-10-26", TOP3)
+    control.cash_command(conn, "US", "invest", 20_000, "cli")
+    units = run_day(conn, src, cfg, "2026-10-27", TOP3)
+    assert 10_000 <= units[CASH] < 10_500
+
+
+def test_reserved_cash_is_never_spent(env):
+    conn, src, cfg = env
+    control.cash_command(conn, "US", "set", 30_000, "cli")
+    units = run_day(conn, src, cfg, "2026-10-26", TOP3)
+    assert units[CASH] >= 30_000
+
+
+def test_deposit_detected_into_reserve(env):
+    conn, src, cfg = env
+    run_day(conn, src, cfg, "2026-10-26", TOP3)
+    units = db.latest_positions(conn, "US")[1]
+    units[CASH] += 1000
+    db.save_positions(conn, "2026-10-27", "US", units, src.prices)
+    run_day(conn, src, cfg, "2026-10-27", TOP3)
+    assert control.cash_state(conn)["reserve"]["US"] == 1000
+
+
+def test_withdrawal_reduces_reserve_first(env):
+    conn, src, cfg = env
+    control.cash_command(conn, "US", "set", 10_000, "cli")
+    run_day(conn, src, cfg, "2026-10-26", TOP3)
+    units = db.latest_positions(conn, "US")[1]
+    units[CASH] -= 3000
+    db.save_positions(conn, "2026-10-27", "US", units, src.prices)
+    run_day(conn, src, cfg, "2026-10-27", TOP3)
+    assert control.cash_state(conn)["reserve"]["US"] == 7000
+
+
+def test_trade_cash_is_not_a_flow(env):
+    conn, src, cfg = env
+    run_day(conn, src, cfg, "2026-10-26", TOP3)
+    run_day(conn, src, cfg, "2026-10-27", TOP3)
+    assert control.cash_state(conn)["reserve"]["US"] == 0
+
+
+def test_small_change_below_flow_min_ignored(env):
+    conn, src, cfg = env
+    run_day(conn, src, cfg, "2026-10-26", TOP3)
+    units = db.latest_positions(conn, "US")[1]
+    units[CASH] += 9
+    db.save_positions(conn, "2026-10-27", "US", units, src.prices)
+    run_day(conn, src, cfg, "2026-10-27", TOP3)
+    assert control.cash_state(conn)["reserve"]["US"] == 0
+
+
+def test_pending_cash_forces_trade_and_clears(env):
+    conn, src, _ = env
+    cfg = Config(us_fee=0, trade_every="week", fx_enabled=False)
+    run_day(conn, src, cfg, "2026-10-26", TOP3)
+    control.cash_command(conn, "US", "reserve", 20_000, "cli")
+    units = run_day(conn, src, cfg, "2026-10-27", TOP3)
+    assert db.load_targets(conn, "2026-10-27", "US")
+    assert units[CASH] >= 20_000
+    assert not control.cash_state(conn)["pending"]["US"]
+
+
+def test_reserve_deficit_rounds_sales_up_and_accounts_for_fees(env):
+    conn, src, _ = env
+    cfg = Config(us_fee=0.001, trade_every="day", fx_enabled=False, min_trade_pct=0)
+    run_day(conn, src, cfg, "2026-10-26", TOP3)
+    control.cash_command(conn, "US", "reserve", 30_050, "cli")
+    units = run_day(conn, src, cfg, "2026-10-27", TOP3)
+    assert units[CASH] >= 30_050
+
+
+def test_pending_survives_execute_failure(env):
+    conn, src, cfg = env
+    run_day(conn, src, cfg, "2026-10-26", TOP3)
+    control.cash_command(conn, "US", "reserve", 20_000, "cli")
+    set_day(src, "2026-10-27", TOP3)
+    jobs.run_signal(conn, US, "2026-10-27", src, cfg, pd.Timestamp("2026-10-27 11:50", tz=NY))
+    src.prices.clear()
+    with pytest.raises(jobs.JobError):
+        jobs.run_execute(conn, US, "2026-10-27", src, cfg, pd.Timestamp("2026-10-27 12:50", tz=NY))
+    assert control.cash_state(conn)["pending"]["US"]
+
+
+def test_failed_execute_still_reobserves_cash(env, monkeypatch):
+    conn, src, cfg = env
+    set_day(src, "2026-10-26", TOP3)
+
+    class FailsAfterFill(AccountBroker):
+        def place(self, market, ticker, side, qty, price):
+            if self.orders:
+                raise RuntimeError("order failed")
+            return super().place(market, ticker, side, qty, price)
+
+    broker = FailsAfterFill({"US": {CASH: 100_000.0}}, src.prices, cfg)
+    control.cash_command(conn, "US", "set", 0, "cli")
+    jobs.run_signal(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 11:50", tz=NY), broker=broker)
+    src.quote_time = pd.Timestamp("2026-10-26 12:40", tz=NY)
+    with pytest.raises(RuntimeError, match="order failed"):
+        jobs.run_execute(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 12:50", tz=NY), broker=broker)
+    assert broker.balance("US")[CASH] < 100_000
+    assert control.cash_state(conn)["pending"]["US"]
+    flows = []
+    monkeypatch.setattr(control, "record_flow", lambda *args, **kwargs: flows.append(args))
+    set_day(src, "2026-10-27", TOP3)
+    jobs.run_signal(conn, US, "2026-10-27", src, cfg, pd.Timestamp("2026-10-27 11:50", tz=NY), broker=broker)
+    assert flows == []
+
+
+def test_failed_reobservation_preserves_order_exception(env, caplog):
+    conn, src, cfg = env
+    set_day(src, "2026-10-26", TOP3)
+
+    class FailsAfterFill(AccountBroker):
+        failed = False
+
+        def place(self, market, ticker, side, qty, price):
+            if self.orders:
+                self.failed = True
+                raise RuntimeError("order failed")
+            return super().place(market, ticker, side, qty, price)
+
+        def balance(self, market):
+            if self.failed:
+                raise ValueError("balance unavailable")
+            return super().balance(market)
+
+    broker = FailsAfterFill({"US": {CASH: 100_000.0}}, src.prices, cfg)
+    jobs.run_signal(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 11:50", tz=NY), broker=broker)
+    src.quote_time = pd.Timestamp("2026-10-26 12:40", tz=NY)
+    with pytest.raises(RuntimeError, match="order failed"):
+        jobs.run_execute(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 12:50", tz=NY), broker=broker)
+    assert "balance unavailable" in caplog.text
+
+
+def test_pending_kept_while_reserve_underfunded(env):
+    conn, src, _ = env
+    cfg = Config(us_fee=0, trade_every="week", fx_enabled=False)
+    initial = run_day(conn, src, cfg, "2026-10-26", TOP3)
+
+    class PartialSeller(AccountBroker):
+        partial = True
+
+        def place(self, market, ticker, side, qty, price):
+            if self.partial and side == "SELL":
+                qty = max(1, qty // 2)
+            return super().place(market, ticker, side, qty, price)
+
+    broker = PartialSeller({"US": initial}, src.prices, cfg)
+    control.cash_command(conn, "US", "reserve", 30_000, "cli")
+    set_day(src, "2026-10-27", TOP3)
+    jobs.run_signal(conn, US, "2026-10-27", src, cfg, pd.Timestamp("2026-10-27 11:50", tz=NY), broker=broker)
+    src.quote_time = pd.Timestamp("2026-10-27 12:40", tz=NY)
+    result = jobs.run_execute(conn, US, "2026-10-27", src, cfg, pd.Timestamp("2026-10-27 12:50", tz=NY),
+                              broker=broker, params=jobs.ExecParams(ladder=(0.0,)))
+    assert "PARTIAL" in result
+    assert broker.balance("US")[CASH] < 30_000 - cfg.flow_min_usd
+    assert control.cash_state(conn)["pending"]["US"]
+
+    broker.partial = False
+    set_day(src, "2026-10-28", TOP3)
+    jobs.run_signal(conn, US, "2026-10-28", src, cfg, pd.Timestamp("2026-10-28 11:50", tz=NY), broker=broker)
+    assert db.load_targets(conn, "2026-10-28", "US")
+    src.quote_time = pd.Timestamp("2026-10-28 12:40", tz=NY)
+    jobs.run_execute(conn, US, "2026-10-28", src, cfg, pd.Timestamp("2026-10-28 12:50", tz=NY), broker=broker)
+    assert broker.balance("US")[CASH] >= 30_000 - cfg.flow_min_usd
+    assert not control.cash_state(conn)["pending"]["US"]
+
+
+@pytest.mark.parametrize("reserve,expected_pending", [(1009, False), (1010, False), (1011, True)])
+def test_pending_reserve_deficit_threshold(env, monkeypatch, reserve, expected_pending):
+    conn, src, cfg = env
+    set_day(src, "2026-10-26", TOP3)
+    broker = AccountBroker({"US": {CASH: 1000, "AAPL": 100}}, src.prices, cfg)
+    control.cash_command(conn, "US", "set", reserve, "cli")
+    jobs.run_signal(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 11:50", tz=NY), broker=broker)
+    src.quote_time = pd.Timestamp("2026-10-26 12:40", tz=NY)
+    monkeypatch.setattr(jobs, "execute", lambda *args, **kwargs: [])
+    jobs.run_execute(conn, US, "2026-10-26", src, cfg, pd.Timestamp("2026-10-26 12:50", tz=NY), broker=broker)
+    assert control.cash_state(conn)["pending"]["US"] is expected_pending

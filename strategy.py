@@ -40,6 +40,8 @@ class Config:
     trade_every: str = "week"         # 매매 주기
     fx_band_pp: float = 5.0           # 미국 비중 환전 허용 오차 (%p)
     fx_enabled: bool = True          # 환전 계획 사용 여부
+    flow_min_krw: float = 10_000.0  # 입출금 감지 최소 금액 (원)
+    flow_min_usd: float = 10.0       # 입출금 감지 최소 금액 (달러)
     fx_wait_days: int = 3             # 환전 대기 일수
     pool_size: int = 15               # 시장별 후보 풀 크기 (종목 수)
     pool_auto: bool = True            # 후보 풀을 매주 자동 갱신 (끄면 수동 목록 유지)
@@ -156,7 +158,7 @@ def pocket_weights(stock_w: dict[str, float], market: str, cfg: Config,
 
 
 def plan_moves(units: dict[str, float], prices: dict[str, float], weights: dict[str, float],
-               cfg: Config, investable: float) -> dict[str, float]:
+               cfg: Config, investable: float, cash_flow: float = 0.0) -> dict[str, float]:
     """Limit both purchases and sales as a fraction of pocket value."""
     cur = {ticker: amount * prices[ticker] for ticker, amount in units.items()
            if ticker != CASH and amount > 0}
@@ -165,7 +167,7 @@ def plan_moves(units: dict[str, float], prices: dict[str, float], weights: dict[
     out = sum(max(cur.get(t, 0.0) - want.get(t, 0.0), 0.0) for t in names)
     inn = sum(max(want.get(t, 0.0) - cur.get(t, 0.0), 0.0) for t in names)
     largest = max(out, inn)
-    cap = cfg.step_pct / 100 * pocket_value(units, prices)
+    cap = max(0.0, cfg.step_pct / 100 * pocket_value(units, prices)) + max(0.0, cash_flow)
     alpha = 1.0 if not cur or largest == 0 else min(1.0, cap / largest)
     target = {t: cur.get(t, 0.0) + alpha * (want.get(t, 0.0) - cur.get(t, 0.0)) for t in names}
     return {t: value for t, value in target.items() if value > 1e-9}
